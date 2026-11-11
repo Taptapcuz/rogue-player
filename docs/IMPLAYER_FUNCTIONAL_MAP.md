@@ -78,6 +78,22 @@ the Samsung Fold6, 2026-11-10. Source of truth for what MYTV should replicate
   - Walk-Though Guide
 - Links: About / Privacy / Terms; **Device ID** row with copy button.
 
+## App Configuration (menu → App Configuration)
+Sub-screens (each a row → sub-page):
+- **General** — Playlists: *Playlist update interval (hours)* "48 Hours" ·
+  *Set EPG offset* "None" · toggle "Disable playlist update when the app is
+  closed". Customizations: *Choose the app theme* "Night" · toggle "Disable app
+  notifications" · *Set app language* "Not set" · toggle "Reduce app
+  animations" · toggle "Use AM/PM style clock" · Media Controls.
+- **Playback** — Media Player: *Buffer size* "Default" · *Real time live
+  streams* ("will reduce loading time and delay") · *Use audio software
+  decoder* · *Set User-Agent* "iMPlayer". Player Behavior: *Auto stream
+  reconnect* ("reload after 5s of buffering") · *Force HLS format* ("attempt to
+  use HLS when possible") · *On channel change, freeze image*.
+- **V.O.D** — Resume progress, intros & VOD playback.
+- **App Behavior** — Startup & navigation behavior.
+- **Recordings, Reminders and Downloads** — Offsets & allowed downloads.
+
 ## Player (opened by tapping a channel / VOD)
 Rendered as a layer on the same activity:
 - Video area controls: **mute** (top-left), **PiP**, **fullscreen** (top-right),
