@@ -2,11 +2,15 @@ package com.mytv.app.ui
 
 import android.annotation.SuppressLint
 import android.content.Intent
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.util.Log
+import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
@@ -25,32 +29,41 @@ import java.text.SimpleDateFormat
 import java.util.Locale
 
 /**
- * MYTV phone UI — implayer-style dark interface: Live / Movies / Series / Guide /
- * Favourites / Playlists. Add a playlist (M3U or Xtream) via the + button.
+ * MYTV phone UI — implayer-style dark interface:
+ * top bar (M logo, MYTV 1.0, search, LIVE badge) + left sidebar
+ * (BROWSE: Live TV / TV guide / Movies / Series / Favourites; PLAYLISTS +
+ *  "Add playlist"; Settings; "Demo mode / Sample channels only" footer)
+ * + content pane. The car side projects the same player via Fermata-style
+ * NAVIGATION-category projection.
  */
 class MainActivity : AppCompatActivity() {
 
     private val app by lazy { application as MyApplication }
     private lateinit var adapter: BrowseAdapter
-    private lateinit var tabRow: LinearLayout
+    private lateinit var sidebar: LinearLayout
+    private lateinit var contentPane: FrameLayout
     private lateinit var tvPlaceholder: TextView
 
     private var currentSection = Section.LIVE
     private var scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
-    private val onClickChannel: (Channel) -> Unit = { ch ->
-        startPlayback(ch.url, ch.name, 0)
-    }
-    private val onClickEntry: (Entry, Boolean) -> Unit = { e, isMovie ->
-        startPlayback(e.url, e.name, 0)
-    }
+    private val onClickChannel: (Channel) -> Unit = { ch -> startPlayback(ch.url, ch.name, 0) }
+    private val onClickEntry: (Entry, Boolean) -> Unit = { e, _ -> startPlayback(e.url, e.name, 0) }
 
-    enum class Section { LIVE, MOVIES, SERIES, GUIDE, FAVOURITES, PLAYLISTS }
+    enum class Section(val label: String, val badge: String) {
+        LIVE("Live TV", "●"), GUIDE("TV guide", "▤"),
+        MOVIES("Movies", "▣"), SERIES("Series", "▦"),
+        FAVOURITES("Favourite", "★"), PLAYLISTS("Playlists", "+"),
+        SETTINGS("Settings", "⚙")
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.statusBarColor = Palette.BG
         buildPhoneUi()
     }
+
+    // ------------------------------------------------------------- chrome ---
 
     @SuppressLint("SetTextI18n")
     private fun buildPhoneUi() {
@@ -58,85 +71,177 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Palette.BG)
         }
+        root.addView(topBar())
 
-        // ---- top bar: MYTV + search hint ----
-        root.addView(TextView(this).apply {
-            text = "MYTV  1.0"
-            setTextColor(Palette.TEXT)
-            textSize = 20f
-            setPadding(dp(14), dp(14), dp(14), dp(4))
-        })
+        val mid = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        sidebar = LinearLayout(this).apply { setBackgroundColor(Palette.BG) }
+        mid.addView(sidebar, LinearLayout.LayoutParams(
+            dp(188), LinearLayout.LayoutParams.MATCH_PARENT))
 
-        // ---- tab row ----
-        tabRow = LinearLayout(this).apply {
+        contentPane = FrameLayout(this).apply { setBackgroundColor(Palette.BG) }
+        mid.addView(contentPane, LinearLayout.LayoutParams(
+            0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
+        root.addView(mid, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+
+        setContentView(root)
+        renderSidebar()
+        renderContent()
+    }
+
+    private fun topBar(): View {
+        val bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(dp(6), dp(0), dp(6), dp(8))
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14), dp(12), dp(12), dp(8))
         }
-        root.addView(tabRow)
+        bar.addView(logo("M", 30, Palette.LIVE))
+        bar.addView(TextView(this).apply {
+            text = "MYTV"
+            textSize = 19f
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            setTextColor(Palette.TEXT)
+        })
+        bar.addView(TextView(this).apply {
+            text = "1.0"
+            textSize = 11f
+            setTextColor(Palette.DIM)
+            setPadding(0, 0, dp(14), 0)
+        })
+        bar.addView(TextView(this).apply {
+            text = "  Search channels, movies, series  "
+            textSize = 13f
+            setTextColor(Palette.DIM)
+            setBackground(rounded(Palette.CARD, 9))
+            gravity = Gravity.CENTER_VERTICAL
+        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        bar.addView(capsule("●  LIVE", Palette.LIVE))
+        return bar
+    }
 
-        // ---- body: placeholder text + list ----
-        tvPlaceholder = TextView(this).apply {
-            setTextColor(Palette.MUTED)
-            textSize = 14f
-            gravity = android.view.Gravity.CENTER
-            visibility = View.GONE
+    private fun renderSidebar() {
+        sidebar.removeAllViews()
+        sidebar.setPadding(0, dp(10), dp(10), 0)
+
+        sidebar.addView(sideHead("BROWSE"))
+        sidebar.addView(nav(Section.LIVE))
+        sidebar.addView(nav(Section.GUIDE))
+        sidebar.addView(nav(Section.MOVIES))
+        sidebar.addView(nav(Section.SERIES))
+        sidebar.addView(nav(Section.FAVOURITES))
+
+        sidebar.addView(sideHead("PLAYLISTS"))
+        app.repository.playlists.value.take(3).forEach { pl ->
+            sidebar.addView(sidePlaylist(pl.name, pl.channels.size, pl.active))
         }
-        root.addView(tvPlaceholder, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, dp(80)))
+        sidebar.addView(TextView(this).apply {
+            text = "+   Add playlist"
+            textSize = 12.5f
+            setTextColor(Palette.ACCENTS[0])
+            setPadding(dp(24), dp(8), dp(10), dp(8))
+            setOnClickListener { showAddDialog() }
+        }, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(2) })
 
+        sidebar.addView(nav(Section.SETTINGS))
+
+        // footer card
+        val foot = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            setBackground(rounded(Palette.CARD, 10))
+        }
+        foot.addView(TextView(this).apply {
+            text = "●  Demo mode"
+            textSize = 12f
+            setTextColor(Palette.TEXT)
+        })
+        foot.addView(TextView(this).apply {
+            text = "Sample channels only"
+            textSize = 11f
+            setTextColor(Palette.DIM)
+        })
+        sidebar.addView(foot, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(14) })
+    }
+
+    private fun renderContent() {
+        contentPane.removeAllViews()
         val list = RecyclerView(this).apply {
             layoutManager = LinearLayoutManager(this@MainActivity)
         }
-        root.addView(list, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+        contentPane.addView(list, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         adapter = BrowseAdapter(onClickChannel, onClickEntry)
         list.adapter = adapter
 
-        setContentView(root)
-        renderTabs()
+        tvPlaceholder = TextView(this).apply {
+            setTextColor(Palette.MUTED)
+            textSize = 14f
+            gravity = Gravity.CENTER
+            visibility = View.GONE
+        }
+        contentPane.addView(tvPlaceholder, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, dp(160)))
         reload()
     }
 
-    private fun renderTabs() {
-        tabRow.removeAllViews()
-        Section.entries.forEach { sec ->
-            val active = sec == currentSection
-            tabRow.addView(TextView(this).apply {
-                text = sectionLabel(sec)
-                textSize = 13f
-                setTextColor(if (active) Palette.TEXT else Palette.MUTED)
-                if (active) setBackgroundColor(Palette.CARD_HI)
-                setPadding(dp(14), dp(8), dp(14), dp(8))
-                setOnClickListener {
-                    currentSection = sec
-                    renderTabs()
-                    reload()
-                }
-            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                marginEnd = dp(6)
-            })
+    // ------------------------------------------------------------- nav ---
+
+    private fun nav(sec: Section): View {
+        val active = sec == currentSection
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(8), dp(9), dp(8), dp(9))
+            if (active) setBackground(rounded(withAlpha(Palette.ACCENTS[0], 26), 9))
+            setOnClickListener {
+                if (sec == Section.PLAYLISTS) { showAddDialog(); return@setOnClickListener }
+                currentSection = sec
+                renderSidebar()
+                renderContent()
+            }
         }
+        row.addView(View(this).apply {
+            setBackgroundColor(if (active) Palette.ACCENTS[0] else Color.TRANSPARENT)
+        }, LinearLayout.LayoutParams(dp(3), dp(18)))
+        row.addView(TextView(this).apply {
+            text = "   ${sec.badge}   ${sec.label}"
+            textSize = 13.5f
+            setTextColor(if (active) Palette.TEXT else Palette.MUTED)
+        })
+        return row
     }
 
-    private fun sectionLabel(sec: Section) = when (sec) {
-        Section.LIVE -> "Live TV"
-        Section.MOVIES -> "Movies"
-        Section.SERIES -> "Series"
-        Section.GUIDE -> "Guide"
-        Section.FAVOURITES -> "Favourites"
-        Section.PLAYLISTS -> "Playlists"
+    private fun sideHead(text: String): View = TextView(this).apply {
+        this.text = text
+        textSize = 10f
+        setTypeface(null, android.graphics.Typeface.BOLD)
+        setTextColor(Palette.DIM)
+        setPadding(dp(12), dp(10), dp(10), dp(4))
     }
+
+    private fun sidePlaylist(name: String, count: Int, active: Boolean): View =
+        TextView(this).apply {
+            text = "$name   $count"
+            textSize = 12.5f
+            setTextColor(if (active) Palette.TEXT else Palette.MUTED)
+            setPadding(dp(24), dp(7), dp(10), dp(7))
+        }
+
+    // ------------------------------------------------------------- body ---
 
     private fun reload() {
         val pl = app.repository.activePlaylist
         if (pl == null) {
             adapter.submitList(emptyList())
             tvPlaceholder.visibility = View.VISIBLE
-            tvPlaceholder.text = "No playlist yet.\nTap + to add an M3U link or an Xtream login."
+            tvPlaceholder.text = "No playlist yet.\nTap “+ Add playlist” in the sidebar for an M3U link or Xtream login."
             return
         }
         tvPlaceholder.visibility = View.GONE
-
         val items = when (currentSection) {
             Section.LIVE -> pl.channels.map { BrowseItem.ChannelRow(it) as BrowseItem }
             Section.MOVIES -> pl.movies.map { BrowseItem.EntryRow(it, true) as BrowseItem }
@@ -145,8 +250,16 @@ class MainActivity : AppCompatActivity() {
             Section.FAVOURITES -> pl.channels.take(6).map { BrowseItem.ChannelRow(it) as BrowseItem } +
                 pl.movies.take(4).map { BrowseItem.EntryRow(it, true) as BrowseItem }
             Section.PLAYLISTS -> app.repository.playlists.value.flatMap { p ->
-                listOf(BrowseItem.Message("• ${p.name}  (${p.kind.name})  ${p.channels.size} ch") as BrowseItem)
+                listOf(BrowseItem.Message("•  ${p.name}  (${p.kind.name})  ${p.channels.size} ch") as BrowseItem)
             }
+            Section.SETTINGS -> listOf(
+                BrowseItem.Message("Autoplay next: on"),
+                BrowseItem.Message("Remember position: on"),
+                BrowseItem.Message("Buffer before playing: 4 s"),
+                BrowseItem.Message("Accent: violet / teal / orange"),
+                BrowseItem.Message("MYTV 1.0 — personal build"),
+                BrowseItem.Message("Car projection: Android Auto (NAVIGATION)"),
+            )
         }
         adapter.submitList(items)
     }
@@ -167,6 +280,8 @@ class MainActivity : AppCompatActivity() {
         return out
     }
 
+    // -------------------------------------------------------- playback ---
+
     private fun startPlayback(url: String, title: String, posMs: Long) {
         if (url.isBlank()) { toast("No stream URL"); return }
         startService(Intent(this, PlaybackService::class.java)
@@ -181,7 +296,7 @@ class MainActivity : AppCompatActivity() {
         android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_SHORT).show()
     }
 
-    /** Show the add-playlist dialog. */
+    /** Show the add-playlist dialog (M3U or Xtream). */
     @SuppressLint("SetTextI18n")
     fun showAddDialog() {
         val fields = LayoutInflater.from(this).inflate(R.layout.dialog_add_playlist, null)
@@ -193,7 +308,6 @@ class MainActivity : AppCompatActivity() {
         val tabM3u = fields.findViewById<TextView>(R.id.tab_m3u)
         val tabXtream = fields.findViewById<TextView>(R.id.tab_xtream)
 
-        // default: M3U tab active
         var isXtream = false
         fun refresh() {
             urlEdit.visibility = if (isXtream) View.GONE else View.VISIBLE
@@ -220,16 +334,16 @@ class MainActivity : AppCompatActivity() {
                         try {
                             val name = nameEdit.text.toString().trim()
                             val src = if (isXtream) {
-                                val host = hostEdit.text.toString().trim()
-                                val u = userEdit.text.toString().trim()
-                                val p = passEdit.text.toString().trim()
-                                PlaylistParser.load(PlaylistKind.XTREAM, host, u, p)
+                                PlaylistParser.load(PlaylistKind.XTREAM,
+                                    hostEdit.text.toString().trim(),
+                                    userEdit.text.toString().trim(),
+                                    passEdit.text.toString().trim())
                             } else {
-                                val url = urlEdit.text.toString().trim()
-                                PlaylistParser.load(PlaylistKind.M3U, url, null, null)
+                                PlaylistParser.load(PlaylistKind.M3U,
+                                    urlEdit.text.toString().trim(), null, null)
                             }
                             app.repository.add(if (name.isNotBlank()) src.copy(name = name) else src)
-                            reload()
+                            renderSidebar(); renderContent()
                             dialog.dismiss()
                         } catch (t: Throwable) {
                             Log.e("MYTV", "add failed", t)
@@ -239,6 +353,39 @@ class MainActivity : AppCompatActivity() {
                 }
             }
     }
+
+    // -------------------------------------------------------- palette ---
+
+    private fun logo(ch: String, size: Int, color: Int): View {
+        val tile = TextView(this).apply {
+            text = ch
+            textSize = size * 0.52f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            setBackground(rounded(color, 8))
+        }
+        tile.layoutParams = LinearLayout.LayoutParams(dp(size), dp(size)).apply {
+            marginEnd = dp(8)
+        }
+        return tile
+    }
+
+    private fun capsule(label: String, color: Int): View = TextView(this).apply {
+        text = label
+        textSize = 10.5f
+        setTextColor(color)
+        setBackground(rounded(withAlpha(color, 30), 12))
+        setPadding(dp(10), dp(5), dp(10), dp(5))
+    }
+
+    private fun rounded(fill: Int, radius: Int): GradientDrawable =
+        GradientDrawable().apply {
+            setColor(fill)
+            cornerRadius = radius * resources.displayMetrics.density
+        }
+
+    private fun withAlpha(color: Int, alpha: Int): Int =
+        Color.argb(alpha, Color.red(color), Color.green(color), Color.blue(color))
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 }
