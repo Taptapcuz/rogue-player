@@ -90,9 +90,28 @@ Sub-screens (each a row → sub-page):
   decoder* · *Set User-Agent* "iMPlayer". Player Behavior: *Auto stream
   reconnect* ("reload after 5s of buffering") · *Force HLS format* ("attempt to
   use HLS when possible") · *On channel change, freeze image*.
-- **V.O.D** — Resume progress, intros & VOD playback.
-- **App Behavior** — Startup & navigation behavior.
+- **V.O.D** — Next Episode: *Disable auto play next episode*. Skip Intros:
+  *Skip Behavior* / *Show Skip Button* ("control how the player reacts to
+  detected intros"). TMDB: *Hide Top 10 Trending Movies* / *Hide Top 10
+  Trending TV Shows*.
+- **App Behavior** — App: *On app load open* → "Live TV" · *On app minimize*
+  → "Go to PiP mode". Playlists: *On channel open* → "Open channel details and
+  play channel" · *On channel details close* → "Do nothing" · *On movie play* →
+  "Play movie at full screen" · *On episode play* → "Play episode at full
+  screen". Bottom Menu toggles: Hide Home / Hide Live TV / Hide Movies /
+  Hide TV Shows / Hide Sports.
 - **Recordings, Reminders and Downloads** — Offsets & allowed downloads.
+
+## Premium gate (menu → Activate / Sync and Data / Management Code)
+"iMPlayer premium subscription": Recording · Catch-Up · V.O.D downloads ·
+Cloud management · Sync playlists and favorites · Sports and EPG reminders ·
+Multiple playlists. Actions: "Login and Activate" / "Buy and Own".
+
+## Playlists Modifications (menu → Playlists Modifications)
+- **Custom Live TV Groups** — Create, edit & import your groups.
+- **Groups Customizations** — Hide, reorder & pin groups.
+- **Un-Hide Channels** — Restore hidden channels.
+- **Un-Hide Sports and Leagues** — Restore hidden sports/leagues.
 
 ## Player (opened by tapping a channel / VOD)
 Rendered as a layer on the same activity:
