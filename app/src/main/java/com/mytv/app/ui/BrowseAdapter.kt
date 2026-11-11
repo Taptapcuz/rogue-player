@@ -6,6 +6,7 @@ import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.recyclerview.widget.DiffUtil
@@ -15,9 +16,9 @@ import com.mytv.app.data.Channel
 import com.mytv.app.data.Entry
 
 /**
- * implayer-style rows: colored logo tile with initials, channel number + name +
- * current program + progress bar + star for channels; poster-ish title rows for
- * movies/series; settings rows with blue toggles.
+ * IMPlayer-clone rows: rounded channel cards (logo tile, name, time, program,
+ * blue progress bar along the card bottom) and poster cards (rating badge,
+ * title) for movies / shows.
  */
 class BrowseAdapter(
     private val onChannel: (Channel) -> Unit,
@@ -25,187 +26,190 @@ class BrowseAdapter(
 ) : ListAdapter<BrowseItem, RecyclerView.ViewHolder>(DIFF) {
 
     object DIFF : DiffUtil.ItemCallback<BrowseItem>() {
-        override fun areItemsTheSame(a: BrowseItem, b: BrowseItem) = a == b
+        override fun areItemsTheSame(a: BrowseItem, b: BrowseItem) = a.toString() == b.toString()
         override fun areContentsTheSame(a: BrowseItem, b: BrowseItem) = a == b
     }
 
     override fun getItemViewType(position: Int): Int = when (getItem(position)) {
-        is BrowseItem.ChannelRow -> 0
-        is BrowseItem.EntryRow -> 1
-        is BrowseItem.GuideHeader -> 2
-        is BrowseItem.GuideShow -> 3
-        is BrowseItem.Message -> 4
+        is BrowseItem.ChannelCard -> 1
+        is BrowseItem.PosterCard -> 2
         is BrowseItem.SectionTitle -> 5
-        is BrowseItem.Setting -> 6
-    }
-
-    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
-        val v = Layout(parent).build(viewType)
-        return object : RecyclerView.ViewHolder(v) {}
+        is BrowseItem.Message -> 4
+        else -> 0
     }
 
     var accent: Int = Palette.ACCENTS[0]
 
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
+        return object : RecyclerView.ViewHolder(build(parent, viewType)) {}
+    }
+
     override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
         when (val item = getItem(position)) {
-            is BrowseItem.ChannelRow -> renderChannel(holder.itemView, item.ch)
-            is BrowseItem.EntryRow -> renderEntry(holder.itemView, item.e, item.isMovie)
-            is BrowseItem.GuideHeader -> (holder.itemView as TextView).apply {
-                text = item.time; setTextColor(accent); textSize = 12f
-            }
-            is BrowseItem.GuideShow -> renderGuideShow(holder.itemView, item)
-            is BrowseItem.Message -> (holder.itemView as TextView).apply {
-                text = item.text; setTextColor(Palette.MUTED); textSize = 13f
-            }
+            is BrowseItem.ChannelCard -> renderChannelCard(holder.itemView, item.ch)
+            is BrowseItem.PosterCard -> renderPosterCard(holder.itemView, item.e, item.isMovie)
             is BrowseItem.SectionTitle -> renderSectionTitle(holder.itemView, item)
-            is BrowseItem.Setting -> renderSetting(holder.itemView, item)
+            is BrowseItem.Message -> (holder.itemView as TextView).apply {
+                text = item.text; setTextColor(Palette.MUTED); textSize = 13f; gravity = Gravity.CENTER
+            }
+            is BrowseItem.GuideShow -> (holder.itemView as TextView).apply {
+                text = "${item.ch.name} — ${item.title} · ${item.start}"
+                setTextColor(Palette.MUTED)
+            }
+            is BrowseItem.EntryRow -> (holder.itemView as TextView).apply {
+                text = item.e.name; setTextColor(Palette.TEXT)
+            }
+            is BrowseItem.ChannelRow -> (holder.itemView as TextView).apply {
+                text = item.ch.name; setTextColor(Palette.TEXT)
+            }
         }
     }
 
-    // -------------------------------------------------------------- rows ---
+    // ------------------------------------------------------------ cards ---
 
     @SuppressLint("SetTextI18n")
-    private fun renderChannel(v: View, ch: Channel) {
-        val row = v as LinearLayout
-        row.removeAllViews()
+    private fun renderChannelCard(v: View, ch: Channel) {
+        val card = v as FrameLayout
+        card.removeAllViews()
+        card.setBackground(rounded(Palette.CARD, 12))
 
-        // number
-        row.addView(TextView(row.context).apply {
-            text = "%03d".format(ch.number)
-            textSize = 10.5f
-            typeface = android.graphics.Typeface.MONOSPACE
-            setTextColor(Palette.DIM)
-            gravity = Gravity.CENTER
-        }, LinearLayout.LayoutParams(dp(row, 34), LinearLayout.LayoutParams.MATCH_PARENT))
-
-        // logo tile (colored initials block)
-        row.addView(logoTile(row, initialsOf(ch.name), hueFor(ch), 38))
-
-        // middle: name + program
-        val mid = LinearLayout(row.context).apply { orientation = LinearLayout.VERTICAL }
-        mid.addView(TextView(row.context).apply {
-            text = ch.name; textSize = 13.5f; setTextColor(Palette.TEXT)
-        })
-        mid.addView(TextView(row.context).apply {
-            text = ch.group.replace('_', ' '); textSize = 11.5f; setTextColor(Palette.MUTED)
-        })
-        row.addView(mid, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-            setMargins(dp(row,10), 0, dp(row,6), 0)
-        })
-
-        // progress bar + star column
-        val right = LinearLayout(row.context).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_VERTICAL }
-        val bar = View(row.context).apply {
-            setBackgroundColor(Palette.LINE)
+        val pad = dp(card, 12)
+        val inner = LinearLayout(card.context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding((pad * 0.6f).toInt(), pad, pad, pad)
         }
-        bar.layoutParams = LinearLayout.LayoutParams(dp(row, 64), dp(row, 3)).apply {
-            setMargins(0, 0, 0, dp(row, 4))
-        }
-        right.addView(bar)
-        right.addView(TextView(row.context).apply {
-            text = "☆"
-            textSize = 15f
-            setTextColor(Palette.DIM)
-            gravity = Gravity.CENTER
-        }, LinearLayout.LayoutParams(dp(row, 40), dp(row, 20)))
+        card.addView(inner, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
 
-        row.addView(right, LinearLayout.LayoutParams(dp(row, 70), LinearLayout.LayoutParams.MATCH_PARENT))
-        row.setOnClickListener { onChannel(ch) }
+        // logo tile
+        inner.addView(logoTile(inner, initialsOf(ch.name), hueFor(ch), 44))
+
+        // right text block
+        val right = LinearLayout(card.context).apply { orientation = LinearLayout.VERTICAL }
+        right.addView(TextView(card.context).apply {
+            text = ch.name
+            textSize = 14f
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            setTextColor(Palette.TEXT)
+            maxLines = 1
+        })
+        right.addView(TextView(card.context).apply {
+            text = ch.group.replace("_", " ")
+            textSize = 11f
+            setTextColor(Palette.MUTED)
+            maxLines = 1
+        })
+        inner.addView(right, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+            setMargins(dp(card,10), 0, dp(card,6), 0)
+        })
+
+        // blue progress bar across the card bottom
+        val bar = View(card.context).apply { setBackgroundColor(Palette.LINE) }
+        card.addView(bar, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, dp(card, 3)).apply {
+            gravity = Gravity.BOTTOM
+        })
+        val fill = View(card.context).apply { setBackgroundColor(accent) }
+        card.addView(fill, FrameLayout.LayoutParams((FrameLayout.LayoutParams.MATCH_PARENT * 0.35f).toInt(), dp(card, 3)).apply {
+            gravity = Gravity.BOTTOM or Gravity.START
+        })
+
+        card.setOnClickListener { onChannel(ch) }
     }
 
-    private fun renderEntry(v: View, e: Entry, isMovie: Boolean) {
-        val row = v as LinearLayout
-        row.removeAllViews()
-        row.addView(logoTile(row, initialsOf(e.name), hueFor(e), 40))
-        val mid = LinearLayout(row.context).apply { orientation = LinearLayout.VERTICAL }
-        mid.addView(TextView(row.context).apply {
-            text = e.name; textSize = 13.5f; setTextColor(Palette.TEXT)
-        })
-        mid.addView(TextView(row.context).apply {
-            text = if (isMovie) "MOVIE   ·   ${e.group}" else "SERIES   ·   ${e.group}"
-            textSize = 11f; setTextColor(Palette.MUTED)
-        })
-        row.addView(mid, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-            setMargins(dp(row,10), 0, dp(row,6), 0)
-        })
-        row.setOnClickListener { onEntry(e, isMovie) }
-    }
+    @SuppressLint("SetTextI18n")
+    private fun renderPosterCard(v: View, e: Entry, isMovie: Boolean) {
+        val card = v as FrameLayout
+        card.removeAllViews()
+        card.setBackground(rounded(hueFor(e), 10))
 
-    private fun renderGuideShow(v: View, item: BrowseItem.GuideShow) {
-        val row = v as LinearLayout
-        row.removeAllViews()
-        row.addView(logoTile(row, initialsOf(item.ch.name), hueFor(item.ch), 34))
-        val mid = LinearLayout(row.context).apply { orientation = LinearLayout.VERTICAL }
-        mid.addView(TextView(row.context).apply {
-            text = item.ch.name; textSize = 13f; setTextColor(Palette.TEXT)
+        // rating badge top-left
+        card.addView(TextView(card.context).apply {
+            text = e.group.ifBlank { if (isMovie) "MOVIE" else "SERIES" }.take(2)
+            textSize = 12f
+            setTextColor(Color.WHITE)
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            setBackground(rounded(Color.argb(200, 0, 0, 0), 6))
+            gravity = Gravity.CENTER
+        }, FrameLayout.LayoutParams(dp(card, 40), dp(card, 22)).apply {
+            setMargins(dp(card,8), dp(card,8), 0, 0)
         })
-        mid.addView(TextView(row.context).apply {
-            text = "${item.title}   ·   ${item.start}"; textSize = 11.5f; setTextColor(Palette.MUTED)
+
+        // title bottom
+        card.addView(TextView(card.context).apply {
+            text = e.name
+            textSize = 12.5f
+            setTextColor(Color.WHITE)
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            gravity = Gravity.BOTTOM
+            maxLines = 2
+            setPadding(dp(card,8), 0, dp(card,8), dp(card,8))
+        }, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT).apply {
+            gravity = Gravity.BOTTOM
         })
-        row.addView(mid, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-            setMargins(dp(row,10), 0, 0, 0)
-        })
-        row.setOnClickListener { onChannel(item.ch) }
+        card.setOnClickListener { onEntry(e, isMovie) }
     }
 
     private fun renderSectionTitle(v: View, item: BrowseItem.SectionTitle) {
-        val col = v as LinearLayout
-        col.removeAllViews()
-        col.addView(TextView(col.context).apply {
-            text = item.text; textSize = 22f; setTextColor(Palette.TEXT)
-        })
-        col.addView(TextView(col.context).apply {
-            text = item.sub; textSize = 12.5f; setTextColor(Palette.MUTED)
-        })
-    }
-
-    @SuppressLint("SetTextI18n")
-    private fun renderSetting(v: View, item: BrowseItem.Setting) {
         val row = v as LinearLayout
         row.removeAllViews()
-        val left = LinearLayout(row.context).apply { orientation = LinearLayout.VERTICAL }
-        left.addView(TextView(row.context).apply {
-            text = item.label; textSize = 13f; setTextColor(Palette.TEXT)
+        row.orientation = LinearLayout.VERTICAL
+        row.addView(TextView(row.context).apply {
+            text = item.text
+            textSize = 20f
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            setTextColor(Palette.TEXT)
         })
-        if (item.detail != null) left.addView(TextView(row.context).apply {
-            text = item.detail; textSize = 11f; setTextColor(Palette.DIM)
+        row.addView(TextView(row.context).apply {
+            text = item.sub
+            textSize = 12f
+            setTextColor(Palette.MUTED)
         })
-        row.addView(left, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-
-        if (item.on != null) {
-            val sw = TextView(row.context).apply {
-                text = if (item.on) "●" else "○"
-                textSize = 18f
-                setTextColor(if (item.on) accent else Palette.DIM)
-            }
-            row.addView(sw, LinearLayout.LayoutParams(dp(row,48), LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                gravity = Gravity.END
-            })
-        }
-        if (item.isSlider) row.addView(TextView(row.context).apply {
-            text = "4 s"; textSize = 12f; setTextColor(Palette.MUTED)
-        })
+        // blue underline
+        val line = View(row.context).apply { setBackgroundColor(accent) }
+        row.addView(line, LinearLayout.LayoutParams(dp(row, 44), dp(row, 2)).apply { topMargin = dp(row, 4) })
     }
 
     // ----------------------------------------------------------- helpers ---
 
+    private fun build(parent: ViewGroup, viewType: Int): View {
+        val d = parent.context.resources.displayMetrics.density
+        return when (viewType) {
+            // channel card
+            1 -> FrameLayout(parent.context).apply {
+                layoutParams = RecyclerView.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(parent, 76))
+            }
+            // poster card: 3 per row ~ 110w x 150h
+            2 -> FrameLayout(parent.context).apply {
+                layoutParams = RecyclerView.LayoutParams(dp(parent, 110), dp(parent, 150))
+            }
+            // section title
+            5 -> LinearLayout(parent.context).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(0, (18 * d).toInt(), 0, (10 * d).toInt())
+            }
+            else -> TextView(parent.context).apply {
+                setPadding((14 * d).toInt(), (12 * d).toInt(), (14 * d).toInt(), (12 * d).toInt())
+            }
+        }
+    }
+
     private fun logoTile(parent: View, initials: String, color: Int, size: Int): View {
         val tile = TextView(parent.context).apply {
             text = initials
-            textSize = (size * 0.32f)
+            textSize = size * 0.3f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
-            setBackground(roundedTile(color, size))
+            setBackground(rounded(color, 8))
         }
-        tile.layoutParams = LinearLayout.LayoutParams(dp(parent, size), dp(parent, size)).apply {
-            setMargins(0, dp(parent, 6), dp(parent, 10), dp(parent, 6))
-        }
+        tile.layoutParams = LinearLayout.LayoutParams(dp(parent, size), dp(parent, size))
         return tile
     }
 
-    private fun roundedTile(color: Int, radius: Int): GradientDrawable = GradientDrawable().apply {
+    private fun rounded(color: Int, radius: Int): GradientDrawable = GradientDrawable().apply {
         setColor(color)
-        cornerRadius = radius * 0.3f
+        cornerRadius = radius * 1.2f
     }
 
     private fun hueFor(something: Any): Int {
@@ -218,26 +222,4 @@ class BrowseAdapter(
             .map { it.first().uppercaseChar() }.joinToString("")
 
     private fun dp(v: View, n: Int): Int = (n * v.resources.displayMetrics.density).toInt()
-
-    /** Builds a vertical LinearLayout row padded for the given view type. */
-    private class Layout(private val parent: ViewGroup) {
-        fun build(viewType: Int): View {
-            val lp = if (viewType == 5) { // section title: vertical, wrapping
-                androidx.recyclerview.widget.RecyclerView.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-            } else LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-            val pad = if (viewType == 0 || viewType == 1 || viewType == 3) 12
-                      else if (viewType == 5) 16 else 14
-            val d = parent.context.resources.displayMetrics.density
-            val v = LinearLayout(parent.context).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding((pad * d).toInt(), ((if (viewType==5) 18 else 10) * d).toInt(),
-                           (pad * d).toInt(), (10 * d).toInt())
-                setBackgroundColor(if (viewType % 2 == 0) Palette.BG else Palette.BG)
-            }
-            v.layoutParams = lp
-            return v
-        }
-    }
 }
