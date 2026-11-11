@@ -63,6 +63,21 @@ the Samsung Fold6, 2026-11-10. Source of truth for what MYTV should replicate
   that. Try speaking again." / "Try again" + **language selector**
   ("English (United States)").
 
+## App menu (bottom-sheet, header ⋮)
+- **Activate Premium** (status "Free").
+- **Manage** section:
+  - Manage Playlists
+  - Sync and Data
+  - Management Code
+  - Recordings, Reminders and Downloads
+  - Trakt integration
+- **Preferences & help** section:
+  - App Configuration
+  - Playlists Modifications
+  - Support and Feedback (Discord)
+  - Walk-Though Guide
+- Links: About / Privacy / Terms; **Device ID** row with copy button.
+
 ## Player (opened by tapping a channel / VOD)
 Rendered as a layer on the same activity:
 - Video area controls: **mute** (top-left), **PiP**, **fullscreen** (top-right),
