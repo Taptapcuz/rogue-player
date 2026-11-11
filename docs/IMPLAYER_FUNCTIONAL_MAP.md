@@ -63,7 +63,7 @@ the Samsung Fold6, 2026-11-10. Source of truth for what MYTV should replicate
   that. Try speaking again." / "Try again" + **language selector**
   ("English (United States)").
 
-## App menu (bottom-sheet, header ⋮)
+## App menu (bottom-sheet, opened by the top-left menu/logo icon)
 - **Activate Premium** (status "Free").
 - **Manage** section:
   - Manage Playlists
