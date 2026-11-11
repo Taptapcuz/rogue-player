@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Network -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- Android Auto / Android for Cars projection surface -->
+    <uses-permission android:name="androidx.car.app.ACCESS_SURFACE" />
+    <uses-permission android:name="androidx.car.app.NAVIGATION_TEMPLATES" />
+    <uses-permission android:name="android.car.permission.CAR_SPEED" />
+
+    <application
+        android:name=".MyApplication"
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:theme="@style/Theme.MYTV"
+        android:allowBackup="true"
+        android:supportsRtl="true">
+
+        <!-- ============ Phone UI ============ -->
+        <activity
+            android:name=".ui.MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
+            android:theme="@style/Theme.MYTV">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- ============ Car projection (Fermata-style) ============ -->
+        <!-- CarAppService: the projection service Android Auto binds to.
+             NAVIGATION category grants unrestricted surface drawing. -->
+        <service
+            android:name=".car.MYTVCarService"
+            android:exported="true"
+            android:label="@string/car_service_label">
+            <intent-filter>
+                <action android:name="androidx.car.app.CarAppService" />
+                <category android:name="androidx.car.app.category.NAVIGATION" />
+                <category android:name="com.google.android.gms.car.category.CATEGORY_PROJECTION" />
+            </intent-filter>
+            <meta-data
+                android:name="com.google.android.gms.car.application"
+                android:resource="@xml/automotive_app_desc" />
+        </service>
+
+        <!-- Projection activity: renders the phone's surface onto the car screen -->
+        <activity
+            android:name=".car.ProjectionActivity"
+            android:exported="true"
+            android:theme="@android:style/Theme.NoTitleBar.Fullscreen"
+            android:launchMode="singleTask"
+            android:taskAffinity="com.mytv.app.car">
+        </activity>
+
+        <!-- Mirror service: reads the car surface + renders content/video -->
+        <service
+            android:name=".car.MirrorService"
+            android:exported="false" />
+
+        <!-- Media playback service (audio fallback + media session) -->
+        <service
+            android:name=".player.PlaybackService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+    </application>
+
+</manifest>

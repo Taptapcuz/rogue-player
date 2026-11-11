@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- "M" monogram in live-red on dark -->
+    <path
+        android:fillColor="#FF4D5E"
+        android:pathData="M30,34 h10 v26 l10,-18 h8 l10,18 V34 h10 v40 H62 L46,50 v24 Z" />
+</vector>
