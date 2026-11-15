@@ -1,0 +1,192 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/guide_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#0B0B10">
+
+    <!-- header: back, title, loading hint, zoom + now -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="8dp"
+        android:paddingEnd="12dp"
+        android:paddingTop="10dp"
+        android:paddingBottom="8dp">
+
+        <TextView
+            android:id="@+id/guide_back"
+            android:layout_width="34dp"
+            android:layout_height="34dp"
+            android:gravity="center"
+            android:text="‹"
+            android:textColor="#9CA2C0"
+            android:textSize="26sp" />
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="8dp"
+            android:text="TV Guide"
+            android:textColor="#F3F5FF"
+            android:textSize="19sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/guide_status"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="10dp"
+            android:text=""
+            android:textColor="#6C7294"
+            android:textSize="11sp" />
+
+        <TextView
+            android:id="@+id/guide_zoom_out"
+            android:layout_width="36dp"
+            android:layout_height="32dp"
+            android:background="#1D1D26"
+            android:gravity="center"
+            android:text="−"
+            android:textColor="#F3F5FF"
+            android:textSize="18sp" />
+
+        <TextView
+            android:id="@+id/guide_zoom_in"
+            android:layout_width="36dp"
+            android:layout_height="32dp"
+            android:layout_marginStart="4dp"
+            android:background="#1D1D26"
+            android:gravity="center"
+            android:text="+"
+            android:textColor="#F3F5FF"
+            android:textSize="18sp" />
+
+        <TextView
+            android:id="@+id/guide_now"
+            android:layout_width="wrap_content"
+            android:layout_height="32dp"
+            android:layout_marginStart="6dp"
+            android:background="#3D7BFF"
+            android:gravity="center"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:text="Now"
+            android:textColor="#FFFFFF"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <!-- category tabs: filter the guide to one channel group -->
+    <HorizontalScrollView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:scrollbars="none"
+        android:paddingStart="10dp"
+        android:paddingEnd="10dp"
+        android:paddingBottom="6dp">
+
+        <LinearLayout
+            android:id="@+id/guide_groups"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal" />
+    </HorizontalScrollView>
+
+    <FrameLayout
+        android:id="@+id/guide_frame"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <com.mytv.app.ui.EpgGridView
+            android:id="@+id/guide_grid"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <!-- Preview window (TiViMate style): the highlighted row, live, with its
+             current programme underneath. Tap it to go fullscreen. -->
+        <LinearLayout
+            android:id="@+id/guide_preview_card"
+            android:layout_width="248dp"
+            android:layout_height="match_parent"
+            android:layout_gravity="top|end"
+            android:orientation="vertical"
+            android:background="#FF0B0B10"
+            android:padding="8dp">
+
+            <TextView
+                android:id="@+id/guide_preview_label"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="PREVIEW"
+                android:letterSpacing="0.12"
+                android:textColor="#6C7294"
+                android:textSize="9.5sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/guide_preview_status"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="#3D7BFF"
+                android:textSize="10sp"
+                android:visibility="gone" />
+
+            <androidx.media3.ui.PlayerView
+                android:id="@+id/guide_preview"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:layout_marginTop="4dp"
+                android:background="#000000"
+                app:resize_mode="zoom"
+                app:use_controller="false" />
+
+            <TextView
+                android:id="@+id/guide_preview_channel"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="5dp"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="#F3F5FF"
+                android:textSize="12.5sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/guide_preview_program"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="4"
+                android:textColor="#9CA2C0"
+                android:textSize="10.5sp" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:paddingTop="6dp"
+                android:text="Tap preview to go fullscreen"
+                android:textColor="#5C6280"
+                android:textSize="9.5sp" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/guide_empty"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:gravity="center"
+            android:padding="18dp"
+            android:textColor="#9CA2C0"
+            android:textSize="13sp"
+            android:visibility="gone" />
+    </FrameLayout>
+</LinearLayout>
