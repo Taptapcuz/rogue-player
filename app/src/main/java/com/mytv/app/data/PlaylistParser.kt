@@ -5,6 +5,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.json.JSONArray
+import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
 /**
@@ -19,15 +21,23 @@ object PlaylistParser {
         OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
+            // Chrome's header set on every call: a bare request is what these panels
+            // reset (which reads as "login failed" in the app but not in a browser).
+            .addInterceptor { chain ->
+                val b = chain.request().newBuilder()
+                HttpAgent.HEADERS.forEach { (k, v) -> b.header(k, v) }
+                chain.proceed(b.build())
+            }
             .build()
     }
 
-    /** Download a URL text body. */
     private fun fetchText(url: String): String {
-        val req = Request.Builder().url(url).header("User-Agent", "MYTV/1.0").build()
+        val req = Request.Builder().url(url).header("User-Agent", HttpAgent.UA).build()
         client.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) throw IllegalStateException("HTTP ${resp.code} for $url")
-            return resp.body?.string() ?: ""
+            val body = resp.body?.string() ?: ""
+            Log.i(TAG, "GET $url -> ${resp.code}, ${body.length} bytes")
+            return body
         }
     }
 
@@ -71,9 +81,9 @@ object PlaylistParser {
                     serial++
                     val id = "ch.$serial"
                     if (group.equals("MOVIES", true) || group.equals("MOVIE", true)) {
-                        movies.add(Entry(id, name, group, chUrl))
+                        movies.add(Entry(id, name, group, chUrl, logo = attrs["tvg-logo"]?.takeIf { it.isNotBlank() }))
                     } else if (group.equals("SERIES", true) || group.equals("SERIE", true)) {
-                        series.add(Entry(id, name, group, chUrl))
+                        series.add(Entry(id, name, group, chUrl, logo = attrs["tvg-logo"]?.takeIf { it.isNotBlank() }))
                     } else {
                         channels.add(
                             Channel(
@@ -116,10 +126,46 @@ object PlaylistParser {
     }
 
     private fun loadXtream(host: String, user: String, pass: String): Playlist {
-        // strip trailing slash
-        var base = host.trim().trimEnd('/')
-        if (!base.startsWith("http")) base = "http://$base"
+        // Providers move between http and https panels, and people type a bare
+        // host:port. Try the typed scheme first, then the other one, instead of
+        // failing outright on the wrong guess.
+        val trimmed = host.trim().trimEnd('/')
+        val candidates = if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+            listOf(trimmed)
+        } else {
+            listOf("https://$trimmed", "http://$trimmed")
+        }
+        var lastError: Throwable? = null
+        for (base in candidates) {
+            try {
+                return loadXtreamFrom(base, user, pass)
+            } catch (t: Throwable) {
+                lastError = t
+                Log.w(TAG, "xtream attempt failed for $base", t)
+            }
+        }
+        throw lastError ?: IllegalStateException("provider unreachable")
+    }
+
+    private fun loadXtreamFrom(base: String, user: String, pass: String): Playlist {
         val baseUrl = "$base/player_api.php?username=$user&password=$pass"
+
+        // The account blob is the only place Xtream reports a rejected line, and it
+        // does so with HTTP 200 + `"auth": 0`. Without this check a wrong password
+        // surfaced as an empty playlist and "Update" then wiped the good channel
+        // list — the "login failed" report.
+        val account = runCatching { fetchText(baseUrl) }.getOrNull()
+        if (!account.isNullOrBlank()) {
+            val info = runCatching { org.json.JSONObject(account).optJSONObject("user_info") }
+                .getOrNull()
+            if (info != null && info.optInt("auth", 1) == 0) {
+                val status = info.optString("status").takeIf { it.isNotBlank() }
+                throw IllegalStateException(
+                    "Login failed — the provider rejected these credentials" +
+                        (status?.let { " ($it)" } ?: "")
+                )
+            }
+        }
 
         // live categories
         val catJson = fetchText("$baseUrl&action=get_live_categories")
@@ -142,7 +188,7 @@ object PlaylistParser {
         }.filter { it.url.isNotBlank() }
 
         return Playlist(
-            name = host.substringAfter("://").substringBefore('/').ifBlank { "Xtream" },
+            name = base.substringAfter("://").substringBefore('/').ifBlank { "Xtream" },
             kind = PlaylistKind.XTREAM,
             url = baseUrl,
             user = user,
@@ -195,6 +241,46 @@ object PlaylistParser {
         }
     }
 
+    /** Fetch a series' episode list from Xtream's `get_series_info`. */
+    suspend fun episodes(baseUrl: String, seriesId: String): List<Episode> =
+        withContext(Dispatchers.IO) { loadEpisodes(baseUrl, seriesId) }
+
+    private fun loadEpisodes(baseUrl: String, seriesId: String): List<Episode> {
+        val c = credsFrom(baseUrl)
+        if (c.user.isBlank() || c.pass.isBlank()) return emptyList()
+        val json = fetchText("$baseUrl&action=get_series_info&series_id=$seriesId")
+        val out = mutableListOf<Episode>()
+        try {
+            val root = JSONObject(json)
+            val eps = root.optJSONObject("episodes") ?: return emptyList()
+            for (seasonKey in eps.keys()) {
+                val arr = eps.optJSONArray(seasonKey) ?: continue
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    val id = o.opt("id")?.toString()?.takeIf { it.isNotBlank() && it != "null" }
+                        ?: continue
+                    val ext = o.optString("container_extension").ifBlank { "mkv" }
+                    val info = o.optJSONObject("info")
+                    out.add(
+                        Episode(
+                            id = id,
+                            season = o.optInt("season", seasonKey.toIntOrNull() ?: 1),
+                            number = o.optInt("episode_num", i + 1),
+                            title = o.optString("title").ifBlank { info?.optString("name").orEmpty() },
+                            url = "${c.host}/series/${c.user}/${c.pass}/$id.$ext",
+                            durationSec = o.optString("duration").toIntOrNull()
+                                ?: info?.optString("duration_secs")?.toIntOrNull(),
+                            plot = info?.optString("plot")?.ifBlank { null },
+                        )
+                    )
+                }
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "episode parse failed", t)
+        }
+        return out.sortedWith(compareBy({ it.season }, { it.number }))
+    }
+
     /** Build a direct movie/series URL from a player_api base URL. */
     private data class XtreamCreds(val host: String, val user: String, val pass: String)
 
@@ -219,42 +305,49 @@ object PlaylistParser {
         return "$base/live/$user/$pass/$streamId.m3u8"
     }
 
-    /** Parse [{"category_id":"1","category_name":"News"}, ...] into id->name. */
+    /**
+     * Parse `[{"category_id":"1","category_name":"News"}, ...]` into id->name
+     * using a real JSON parser (no regex) — the robust approach the reference
+     * uses. Handles numeric category_id too.
+     */
     private fun parseIdNamePairs(json: String): Map<String, String> {
         val map = mutableMapOf<String, String>()
-        val regex = Regex("\"category_id\"\\s*:\\s*\"?([^\",}]+)\"?\\s*,\\s*\"category_name\"\\s*:\\s*\"([^\"]+)\"")
-        regex.findAll(json).forEach { m ->
-            map[m.groupValues[1]] = m.groupValues[2]
-        }
-        // fallback: handle category_name before category_id
-        if (map.isEmpty()) {
-            val regex2 = Regex("\"category_name\"\\s*:\\s*\"([^\"]+)\"[^}]*?\"category_id\"\\s*:\\s*\"?([^\",}]+)")
-            regex2.findAll(json).forEach { m ->
-                map[m.groupValues[2]] = m.groupValues[1]
+        try {
+            val arr = if (json.trimStart().startsWith("[")) JSONArray(json) else JSONArray()
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val id = o.opt("category_id")?.toString() ?: continue
+                val name = o.optString("category_name")
+                if (id.isNotBlank() && name.isNotBlank()) map[id] = name
             }
+        } catch (t: Throwable) {
+            Log.w(TAG, "parseIdNamePairs failed", t)
         }
         return map
     }
 
     /** Parse live streams JSON array into a list of string maps. */
-    private fun parseXtreamStreams(json: String): List<Map<String, String>> {
-        return parseGenericStreams(json, "stream_id")
-    }
+    private fun parseXtreamStreams(json: String): List<Map<String, String>> =
+        parseGenericStreams(json, "stream_id")
 
-    /** Parse a JSON array of objects into string maps, filtering out method shells. */
+    /** Parse a JSON array of objects into string maps using org.json (no regex). */
     private fun parseGenericStreams(json: String, requiredKey: String): List<Map<String, String>> {
         val out = mutableListOf<Map<String, String>>()
-        val objectRegex = Regex("\\{[^{}]*}")
-        objectRegex.findAll(json).forEach { obj ->
-            val map = mutableMapOf<String, String>()
-            Regex("\"([a-zA-Z_]+)\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"").findAll(obj.value).forEach { m ->
-                if (!map.containsKey(m.groupValues[1])) map[m.groupValues[1]] = m.groupValues[2]
+        try {
+            val arr = if (json.trimStart().startsWith("[")) JSONArray(json) else JSONArray()
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val map = mutableMapOf<String, String>()
+                val it = o.keys()
+                while (it.hasNext()) {
+                    val k = it.next()
+                    val v = o.opt(k) ?: continue
+                    map[k] = v.toString().takeIf { it != "null" } ?: ""
+                }
+                if (map.containsKey(requiredKey)) out.add(map)
             }
-            // also capture numeric id keys with no quotes around value
-            Regex("\"${Regex.escape(requiredKey)}\"\\s*:\\s*\"?([^\",}]+)\"?").find(obj.value)?.let {
-                if (!map.containsKey(requiredKey)) map[requiredKey] = it.groupValues[1]
-            }
-            if (map.containsKey(requiredKey)) out.add(map)
+        } catch (t: Throwable) {
+            Log.w(TAG, "parseGenericStreams failed", t)
         }
         return out
     }
