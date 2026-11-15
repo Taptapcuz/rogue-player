@@ -2,6 +2,7 @@ package com.mytv.app.ui
 
 import android.annotation.SuppressLint
 import android.graphics.Color
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.View
@@ -14,41 +15,76 @@ import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
 import com.mytv.app.data.Channel
 import com.mytv.app.data.Entry
+import com.mytv.app.data.EpgProgram
+import com.mytv.app.data.Episode
 
 /**
- * IMPlayer-clone rows: rounded channel cards (logo tile, name, time, program,
- * blue progress bar along the card bottom) and poster cards (rating badge,
- * title) for movies / shows.
+ * Rows and tiles for the browse screens:
+ *  - rounded live-TV cards (logo tile, name, EPG now/next, blue progress bar)
+ *  - Plex-style poster tiles for movies / shows (grid), plus a compact poster
+ *    row for search results
+ *  - section headers with a bold count pill
+ *  - episode rows in the series screen
  */
 class BrowseAdapter(
     private val onChannel: (Channel) -> Unit,
     private val onEntry: (Entry, Boolean) -> Unit,
+    private val compactPosters: Boolean = false,
+    private val onEpisode: (Episode, String) -> Unit = { _, _ -> },
+    private val onChannelLong: (Channel) -> Unit = {},
 ) : ListAdapter<BrowseItem, RecyclerView.ViewHolder>(DIFF) {
 
-    object DIFF : DiffUtil.ItemCallback<BrowseItem>() {
-        override fun areItemsTheSame(a: BrowseItem, b: BrowseItem) = a.toString() == b.toString()
-        override fun areContentsTheSame(a: BrowseItem, b: BrowseItem) = a == b
-    }
+    /** Favourited channel ids — starred rows and long-press handled by the host. */
+    var favoriteIds: Set<String> = emptySet()
 
-    override fun getItemViewType(position: Int): Int = when (getItem(position)) {
-        is BrowseItem.ChannelCard -> 1
-        is BrowseItem.PosterCard -> 2
-        is BrowseItem.SectionTitle -> 5
-        is BrowseItem.Message -> 4
-        else -> 0
+    object DIFF : DiffUtil.ItemCallback<BrowseItem>() {
+        override fun areItemsTheSame(a: BrowseItem, b: BrowseItem): Boolean = when {
+            a is BrowseItem.ChannelCard && b is BrowseItem.ChannelCard -> a.ch.id == b.ch.id
+            a is BrowseItem.PosterCard && b is BrowseItem.PosterCard ->
+                a.e.id == b.e.id && a.isMovie == b.isMovie
+            a is BrowseItem.SectionTitle && b is BrowseItem.SectionTitle -> a.text == b.text
+            a is BrowseItem.EpisodeItem && b is BrowseItem.EpisodeItem -> a.ep.id == b.ep.id
+            else -> a::class == b::class && a.toString() == b.toString()
+        }
+
+        override fun areContentsTheSame(a: BrowseItem, b: BrowseItem): Boolean = a == b
     }
 
     var accent: Int = Palette.ACCENTS[0]
 
-    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
-        return object : RecyclerView.ViewHolder(build(parent, viewType)) {}
+    override fun getItemViewType(position: Int): Int = when (val item = getItem(position)) {
+        is BrowseItem.ChannelCard -> TYPE_CHANNEL
+        is BrowseItem.PosterCard -> if (compactPosters) TYPE_POSTER_ROW else TYPE_POSTER_TILE
+        is BrowseItem.SectionTitle -> TYPE_SECTION
+        is BrowseItem.EpisodeItem -> TYPE_EPISODE
+        is BrowseItem.Message -> TYPE_MESSAGE
+        else -> TYPE_MESSAGE
     }
+
+    /** Cached EPG now/next per channel id, populated by the activity. */
+    private val nowPlaying = mutableMapOf<String, EpgProgram?>()
+    private val nextPlaying = mutableMapOf<String, EpgProgram?>()
+
+    /** Store refreshed EPG and redraw that channel's row. */
+    fun updateEpg(channel: Channel, now: EpgProgram?, next: EpgProgram?) {
+        nowPlaying[channel.id] = now
+        nextPlaying[channel.id] = next
+        val pos = currentList.indexOfFirst { (it as? BrowseItem.ChannelCard)?.ch?.id == channel.id }
+        if (pos >= 0) notifyItemChanged(pos)
+    }
+
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder =
+        object : RecyclerView.ViewHolder(build(parent, viewType)) {}
 
     override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
         when (val item = getItem(position)) {
             is BrowseItem.ChannelCard -> renderChannelCard(holder.itemView, item.ch)
-            is BrowseItem.PosterCard -> renderPosterCard(holder.itemView, item.e, item.isMovie)
+            is BrowseItem.PosterCard -> {
+                (holder.itemView as PosterCell).bind(item.e, hueFor(item.e))
+                holder.itemView.setOnClickListener { onEntry(item.e, item.isMovie) }
+            }
             is BrowseItem.SectionTitle -> renderSectionTitle(holder.itemView, item)
+            is BrowseItem.EpisodeItem -> renderEpisodeRow(holder.itemView, item)
             is BrowseItem.Message -> (holder.itemView as TextView).apply {
                 text = item.text; setTextColor(Palette.MUTED); textSize = 13f; gravity = Gravity.CENTER
             }
@@ -71,13 +107,12 @@ class BrowseAdapter(
     private fun renderChannelCard(v: View, ch: Channel) {
         val card = v as FrameLayout
         card.removeAllViews()
-        card.setBackground(rounded(Palette.CARD, 12))
+        card.setBackground(rounded(card, Palette.CARD, 12))
 
-        val pad = dp(card, 12)
         val inner = LinearLayout(card.context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding((pad * 0.6f).toInt(), pad, pad, pad)
+            setPadding(dp(card, 10), dp(card, 10), dp(card, 12), dp(card, 10))
         }
         card.addView(inner, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
@@ -86,11 +121,13 @@ class BrowseAdapter(
         inner.addView(logoTile(inner, initialsOf(ch.name), hueFor(ch), 44))
 
         // right text block
+        val now = nowPlaying[ch.id]
+        val next = nextPlaying[ch.id]
         val right = LinearLayout(card.context).apply { orientation = LinearLayout.VERTICAL }
         right.addView(TextView(card.context).apply {
             text = ch.name
             textSize = 14f
-            setTypeface(null, android.graphics.Typeface.BOLD)
+            setTypeface(null, Typeface.BOLD)
             setTextColor(Palette.TEXT)
             maxLines = 1
         })
@@ -100,74 +137,155 @@ class BrowseAdapter(
             setTextColor(Palette.MUTED)
             maxLines = 1
         })
+        // EPG "now" line: Title · HH:mm - HH:mm
+        if (now != null) {
+            right.addView(TextView(card.context).apply {
+                text = "${now.title} · ${time(now.start)} - ${time(now.end)}"
+                textSize = 11.5f
+                setTextColor(Palette.DIM)
+                maxLines = 1
+            })
+        }
+        // EPG "next" line (muted, smaller)
+        if (next != null) {
+            right.addView(TextView(card.context).apply {
+                text = "Next: ${next.title}"
+                textSize = 10.5f
+                setTextColor(0xFF6C7294.toInt())
+                maxLines = 1
+            })
+        }
         inner.addView(right, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-            setMargins(dp(card,10), 0, dp(card,6), 0)
+            setMargins(dp(card, 10), 0, dp(card, 6), 0)
         })
 
-        // blue progress bar across the card bottom
+        // blue progress bar across the card bottom (EPG-aware when available)
         val bar = View(card.context).apply { setBackgroundColor(Palette.LINE) }
         card.addView(bar, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, dp(card, 3)).apply {
             gravity = Gravity.BOTTOM
         })
+        val fillW = if (now != null) {
+            (FrameLayout.LayoutParams.MATCH_PARENT * progressOf(now).coerceIn(0f, 1f)).toInt()
+        } else {
+            (FrameLayout.LayoutParams.MATCH_PARENT * 0.35f).toInt()
+        }
         val fill = View(card.context).apply { setBackgroundColor(accent) }
-        card.addView(fill, FrameLayout.LayoutParams((FrameLayout.LayoutParams.MATCH_PARENT * 0.35f).toInt(), dp(card, 3)).apply {
+        card.addView(fill, FrameLayout.LayoutParams(fillW, dp(card, 3)).apply {
             gravity = Gravity.BOTTOM or Gravity.START
         })
 
+        // A favourited channel gets a star in the card's top-right corner.
+        if (ch.id in favoriteIds) {
+            card.addView(TextView(card.context).apply {
+                text = "★"
+                textSize = 13f
+                setTextColor(accent)
+            }, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+            ).apply {
+                gravity = Gravity.TOP or Gravity.END
+                setMargins(0, dp(card, 5), dp(card, 9), 0)
+            })
+        }
+
         card.setOnClickListener { onChannel(ch) }
+        card.setOnLongClickListener { onChannelLong(ch); true }
     }
+
+    /** What fraction of [p] has elapsed right now (0..1). */
+    private fun progressOf(p: EpgProgram): Float =
+        (System.currentTimeMillis() - p.start).toFloat() / (p.end - p.start).toFloat()
+
+    private fun time(epochMs: Long): String = timestampFormat.format(epochMs)
+
+    private val timestampFormat = java.text.SimpleDateFormat("HH:mm", java.util.Locale.US)
+
+    // ------------------------------------------------------- episode row ---
 
     @SuppressLint("SetTextI18n")
-    private fun renderPosterCard(v: View, e: Entry, isMovie: Boolean) {
-        val card = v as FrameLayout
-        card.removeAllViews()
-        card.setBackground(rounded(hueFor(e), 10))
+    private fun renderEpisodeRow(v: View, item: BrowseItem.EpisodeItem) {
+        val row = v as FrameLayout
+        row.removeAllViews()
+        row.setBackground(rounded(row, Palette.CARD, 10))
 
-        // rating badge top-left
-        card.addView(TextView(card.context).apply {
-            text = e.group.ifBlank { if (isMovie) "MOVIE" else "SERIES" }.take(2)
-            textSize = 12f
+        val inner = LinearLayout(row.context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(row, 12), dp(row, 10), dp(row, 12), dp(row, 10))
+        }
+        row.addView(inner, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+
+        val num = TextView(row.context).apply {
+            text = "S%02dE%02d".format(item.ep.season, item.ep.number)
+            textSize = 11f
+            setTypeface(null, Typeface.BOLD)
             setTextColor(Color.WHITE)
-            setTypeface(null, android.graphics.Typeface.BOLD)
-            setBackground(rounded(Color.argb(200, 0, 0, 0), 6))
             gravity = Gravity.CENTER
-        }, FrameLayout.LayoutParams(dp(card, 40), dp(card, 22)).apply {
-            setMargins(dp(card,8), dp(card,8), 0, 0)
+            background = rounded(row, withAlpha(accent, 0xCC), 7)
+            setPadding(dp(row, 7), dp(row, 4), dp(row, 7), dp(row, 4))
+        }
+        inner.addView(num)
+
+        val title = TextView(row.context).apply {
+            text = item.ep.title.ifBlank { "Episode ${item.ep.number}" }
+            textSize = 14f
+            setTextColor(Palette.TEXT)
+            maxLines = 1
+            setPadding(dp(row, 11), 0, dp(row, 6), 0)
+        }
+        inner.addView(title, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+
+        inner.addView(TextView(row.context).apply {
+            text = "▶"
+            textSize = 15f
+            setTextColor(Palette.MUTED)
         })
 
-        // title bottom
-        card.addView(TextView(card.context).apply {
-            text = e.name
-            textSize = 12.5f
-            setTextColor(Color.WHITE)
-            setTypeface(null, android.graphics.Typeface.BOLD)
-            gravity = Gravity.BOTTOM
-            maxLines = 2
-            setPadding(dp(card,8), 0, dp(card,8), dp(card,8))
-        }, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT).apply {
-            gravity = Gravity.BOTTOM
-        })
-        card.setOnClickListener { onEntry(e, isMovie) }
+        row.setOnClickListener { onEpisode(item.ep, item.seriesTitle) }
     }
 
+    // --------------------------------------------------- section header ---
+
+    /**
+     * Bold title + blue underline on the left, item count in a filled accent
+     * pill on the right. The count is the point, so it gets its own chip
+     * instead of a 12sp muted line.
+     */
     private fun renderSectionTitle(v: View, item: BrowseItem.SectionTitle) {
         val row = v as LinearLayout
         row.removeAllViews()
-        row.orientation = LinearLayout.VERTICAL
-        row.addView(TextView(row.context).apply {
+        row.orientation = LinearLayout.HORIZONTAL
+        row.gravity = Gravity.BOTTOM
+
+        val left = LinearLayout(row.context).apply { orientation = LinearLayout.VERTICAL }
+        left.addView(TextView(row.context).apply {
             text = item.text
-            textSize = 20f
-            setTypeface(null, android.graphics.Typeface.BOLD)
+            textSize = 21f
+            setTypeface(null, Typeface.BOLD)
             setTextColor(Palette.TEXT)
         })
-        row.addView(TextView(row.context).apply {
-            text = item.sub
-            textSize = 12f
-            setTextColor(Palette.MUTED)
-        })
-        // blue underline
         val line = View(row.context).apply { setBackgroundColor(accent) }
-        row.addView(line, LinearLayout.LayoutParams(dp(row, 44), dp(row, 2)).apply { topMargin = dp(row, 4) })
+        left.addView(line, LinearLayout.LayoutParams(dp(row, 34), dp(row, 3)).apply {
+            topMargin = dp(row, 5)
+        })
+        row.addView(left, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+
+        if (item.sub.isNotBlank()) {
+            val pill = TextView(row.context).apply {
+                text = item.sub
+                textSize = 13f
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(Color.WHITE)
+                background = rounded(row, withAlpha(accent, 0xE0), 14)
+                setPadding(dp(row, 12), dp(row, 5), dp(row, 12), dp(row, 5))
+                gravity = Gravity.CENTER
+            }
+            row.addView(pill, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(row, 3) })
+        }
     }
 
     // ----------------------------------------------------------- helpers ---
@@ -175,22 +293,32 @@ class BrowseAdapter(
     private fun build(parent: ViewGroup, viewType: Int): View {
         val d = parent.context.resources.displayMetrics.density
         return when (viewType) {
-            // channel card
-            1 -> FrameLayout(parent.context).apply {
+            TYPE_CHANNEL -> FrameLayout(parent.context).apply {
                 layoutParams = RecyclerView.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, dp(parent, 76))
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(parent, 74))
             }
-            // poster card: 3 per row ~ 110w x 150h
-            2 -> FrameLayout(parent.context).apply {
-                layoutParams = RecyclerView.LayoutParams(dp(parent, 110), dp(parent, 150))
+            TYPE_POSTER_TILE, TYPE_POSTER_ROW ->
+                PosterCell(parent.context, compact = viewType == TYPE_POSTER_ROW).apply {
+                    layoutParams = RecyclerView.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                }
+            TYPE_EPISODE -> FrameLayout(parent.context).apply {
+                layoutParams = RecyclerView.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(parent, 58))
             }
-            // section title
-            5 -> LinearLayout(parent.context).apply {
+            TYPE_SECTION -> LinearLayout(parent.context).apply {
                 orientation = LinearLayout.VERTICAL
-                setPadding(0, (18 * d).toInt(), 0, (10 * d).toInt())
+                setPadding(dp(parent, 4), (18 * d).toInt(), dp(parent, 4), (12 * d).toInt())
+                // Without explicit params RecyclerView gives the row WRAP_CONTENT,
+                // so the weighted title column collapsed and "Channels" wrapped
+                // one letter-group per line in the search results.
+                layoutParams = RecyclerView.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             }
             else -> TextView(parent.context).apply {
                 setPadding((14 * d).toInt(), (12 * d).toInt(), (14 * d).toInt(), (12 * d).toInt())
+                layoutParams = RecyclerView.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             }
         }
     }
@@ -201,16 +329,19 @@ class BrowseAdapter(
             textSize = size * 0.3f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
-            setBackground(rounded(color, 8))
+            setBackground(rounded(parent, color, 8))
         }
         tile.layoutParams = LinearLayout.LayoutParams(dp(parent, size), dp(parent, size))
         return tile
     }
 
-    private fun rounded(color: Int, radius: Int): GradientDrawable = GradientDrawable().apply {
+    private fun rounded(v: View, color: Int, radiusDp: Int): GradientDrawable = GradientDrawable().apply {
         setColor(color)
-        cornerRadius = radius * 1.2f
+        cornerRadius = radiusDp * v.resources.displayMetrics.density
     }
+
+    private fun withAlpha(color: Int, alpha: Int): Int =
+        Color.argb(alpha, Color.red(color), Color.green(color), Color.blue(color))
 
     private fun hueFor(something: Any): Int {
         val h = (something.hashCode() % Palette.HUES.size).let { if (it < 0) it + Palette.HUES.size else it }
@@ -222,4 +353,13 @@ class BrowseAdapter(
             .map { it.first().uppercaseChar() }.joinToString("")
 
     private fun dp(v: View, n: Int): Int = (n * v.resources.displayMetrics.density).toInt()
+
+    companion object {
+        const val TYPE_CHANNEL = 1
+        const val TYPE_POSTER_TILE = 2
+        const val TYPE_MESSAGE = 4
+        const val TYPE_SECTION = 5
+        const val TYPE_POSTER_ROW = 6
+        const val TYPE_EPISODE = 7
+    }
 }

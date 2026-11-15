@@ -2,6 +2,7 @@ package com.mytv.app.ui
 
 import com.mytv.app.data.Channel
 import com.mytv.app.data.Entry
+import com.mytv.app.data.Episode
 
 /** Palette: blue-on-black — IMPlayer-clone, no red. */
 object Palette {
@@ -34,4 +35,5 @@ sealed interface BrowseItem {
     data class SectionTitle(val text: String, val sub: String) : BrowseItem
     data class ChannelCard(val ch: Channel) : BrowseItem     // rounded live-TV card
     data class PosterCard(val e: Entry, val isMovie: Boolean) : BrowseItem // poster card
+    data class EpisodeItem(val ep: Episode, val seriesTitle: String) : BrowseItem // series episode
 }

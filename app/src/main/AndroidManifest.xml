@@ -16,6 +16,7 @@
         android:icon="@mipmap/ic_launcher"
         android:theme="@style/Theme.MYTV"
         android:allowBackup="true"
+        android:usesCleartextTraffic="true"
         android:supportsRtl="true">
 
         <!-- ============ Phone UI ============ -->
@@ -30,6 +31,21 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Fullscreen phone player -->
+        <activity
+            android:name=".ui.PlayerActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize"
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.MYTV" />
+
+        <!-- TiViMate-style TV guide -->
+        <activity
+            android:name=".ui.GuideActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize"
+            android:theme="@style/Theme.MYTV" />
 
         <!-- ============ Car projection (Fermata-style) ============ -->
         <!-- CarAppService: the projection service Android Auto binds to.
@@ -54,6 +70,7 @@
             android:exported="true"
             android:theme="@android:style/Theme.NoTitleBar.Fullscreen"
             android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|density|uiMode"
             android:taskAffinity="com.mytv.app.car">
         </activity>
 
