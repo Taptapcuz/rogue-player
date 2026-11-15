@@ -27,4 +27,24 @@
         android:textSize="15sp"
         android:textStyle="bold" />
 
+    <!-- The head unit has no system back button, so the projection needs an
+         explicit way out that returns to the channel list. -->
+    <TextView
+        android:id="@+id/proj_back"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|end"
+        android:layout_margin="20dp"
+        android:paddingLeft="18dp"
+        android:paddingRight="18dp"
+        android:paddingTop="12dp"
+        android:paddingBottom="12dp"
+        android:background="#CC161A22"
+        android:clickable="true"
+        android:focusable="true"
+        android:text="✕  Channels"
+        android:textColor="#F3F5FF"
+        android:textSize="15sp"
+        android:textStyle="bold" />
+
 </FrameLayout>
