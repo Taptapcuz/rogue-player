@@ -28,14 +28,35 @@ class PlaylistRepository(context: Context) {
     private val _activePlaylistId = MutableStateFlow<String?>(null)
     val activePlaylistId: StateFlow<String?> = _activePlaylistId.asStateFlow()
 
+    /**
+     * Loading the stored source means parsing a multi-megabyte JSON blob (1k
+     * channels + several thousand movies/show entries), which used to happen inside
+     * the constructor — i.e. on the main thread during `Application.onCreate`.
+     *
+     * That was fatal for Android Auto: the Car App host binds the service and asks
+     * for a template almost immediately, and it gives up long before a cold,
+     * multi-second prefs parse finishes, showing its generic
+     * "‹app› has encountered an unexpected error". The phone app paid the same cost
+     * as a slow cold start. Load off-thread and let consumers watch [loadState].
+     */
     init {
-        loadFromPrefs().forEach {
-            _playlists.value = _playlists.value + it
-        }
-        if (_activePlaylistId.value == null && _playlists.value.isNotEmpty()) {
-            _activePlaylistId.value = _playlists.value.first().name
-        }
+        Thread({
+            runCatching { loadFromPrefs() }
+                .onSuccess { sources ->
+                    sources.forEach { pl -> _playlists.value = _playlists.value + pl }
+                    if (_activePlaylistId.value == null && _playlists.value.isNotEmpty()) {
+                        _activePlaylistId.value = _playlists.value.first().name
+                    }
+                }
+                .onFailure { android.util.Log.w("PlaylistRepository", "prefs load failed", it) }
+            _loadState.value = true
+        }, "mytv-load").apply { isDaemon = true }.start()
     }
+
+    private val _loadState = MutableStateFlow(false)
+
+    /** False until the stored playlists have been parsed (see the init block). */
+    val loadState: StateFlow<Boolean> = _loadState.asStateFlow()
 
     val activePlaylist: Playlist?
         get() = _playlists.value.firstOrNull { it.name == _activePlaylistId.value }

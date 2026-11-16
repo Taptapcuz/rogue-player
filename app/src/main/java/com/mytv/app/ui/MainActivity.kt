@@ -29,6 +29,7 @@ import com.mytv.app.data.PlaylistParser
 import com.mytv.app.player.PlaybackService
 import kotlinx.coroutines.*
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.flow.first
 import java.text.SimpleDateFormat
 import java.util.Locale
 
@@ -117,6 +118,14 @@ class MainActivity : AppCompatActivity() {
         loadFavorites()
         installBackHandler()
         buildChrome()
+        // Sources are parsed off-thread now (see PlaylistRepository.init), so the
+        // first frame can legitimately have no playlist yet. Repaint when they land.
+        scope.launch {
+            app.repository.loadState.first { it }
+            renderContent()
+            renderNav()
+            reload()
+        }
     }
 
     /**

@@ -19,12 +19,18 @@
         android:usesCleartextTraffic="true"
         android:supportsRtl="true">
 
-        <!-- Android Auto only reads car capability from THIS element, and only when it
-             sits directly under <application>. It used to be nested inside the
-             CarAppService, where the gearhead validator never looks. -->
+        <!-- Android Auto reads car capability from THESE two elements, and only
+             when they sit directly under <application>. They used to be nested
+             inside the CarAppService, where the gearhead validator never looks —
+             which is what produced "Min API level not declared in manifest
+             (androidx.car.app.minCarApiLevel)" and the host's generic
+             "MYTV has encountered an unexpected error" screen. -->
         <meta-data
             android:name="com.google.android.gms.car.application"
             android:resource="@xml/automotive_app_desc" />
+        <meta-data
+            android:name="androidx.car.app.minCarApiLevel"
+            android:value="1" />
 
         <!-- ============ Phone UI ============ -->
         <activity
@@ -75,11 +81,6 @@
                 <action android:name="androidx.car.app.CarAppService" />
                 <category android:name="androidx.car.app.category.NAVIGATION" />
             </intent-filter>
-            <!-- Lowest car API level we support; Android Auto uses it to decide
-                 whether to offer the app at all. -->
-            <meta-data
-                android:name="androidx.car.app.minCarApiLevel"
-                android:value="1" />
         </service>
 
         <!-- Projection activity: renders the phone's surface onto the car screen -->

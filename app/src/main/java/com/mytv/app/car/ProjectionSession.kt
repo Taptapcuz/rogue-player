@@ -1,6 +1,10 @@
 package com.mytv.app.car
 
+import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
+import android.content.ServiceConnection
+import android.os.IBinder
 import android.util.Log
 import androidx.car.app.AppManager
 import androidx.car.app.CarContext
@@ -8,129 +12,286 @@ import androidx.car.app.Screen
 import androidx.car.app.Session
 import androidx.car.app.model.Action
 import androidx.car.app.model.ActionStrip
+import androidx.car.app.model.CarColor
 import androidx.car.app.model.ItemList
+import androidx.car.app.model.ListTemplate
 import androidx.car.app.model.ParkedOnlyOnClickListener
 import androidx.car.app.model.Row
 import androidx.car.app.model.Template
 import androidx.car.app.navigation.model.NavigationTemplate
-import androidx.car.app.navigation.model.PlaceListNavigationTemplate
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import com.mytv.app.MyApplication
 import com.mytv.app.data.Channel
 import com.mytv.app.player.PlaybackService
 
 /**
- * The car session: a channel list in the navigation category (nav category =
+ * The car session: browse templates in the navigation category (nav category =
  * unrestricted surface) plus full-screen video on the surface the head unit
  * provides.
  *
- * The one thing taken from Fermata's design is the rule that the *car* owns the
- * geometry. We honour it through the supported Car App Library surface
- * ([CarVideoSurface]) instead of the deprecated proprietary car SDK, and once a
- * channel is picked we push a bare [NavigationTemplate] so the surface — not a
- * list — covers the screen. Hosts that never hand us a surface fall back to the
- * projected [ProjectionActivity].
+ * Two hard car rules are encoded here:
+ *
+ * 1. **Never put the whole playlist in one template.** This screen used to add one
+ *    Row per channel — 1,041 on this account — and the host answers that with a
+ *    failed/abandoned template (Binder payload size plus the render deadline),
+ *    which is exactly what "shows up, doesn't open fully, then error" looks like.
+ *    The root list is now Favourites + provider groups, and a group screen caps at
+ *    [MAX_ROWS].
+ *
+ * 2. **Never startService from a car screen.** A projected session is not a
+ *    foreground app, so `startService` throws
+ *    BackgroundServiceStartNotAllowedException (the same failure that used to
+ *    crash the guide preview). Playback now goes through a *bound*
+ *    [PlaybackService], with the request queued until the binding lands.
  */
 class ProjectionSession : Session() {
 
     private var videoSurface: CarVideoSurface? = null
+    private val carPlay by lazy { CarPlay(carContext) }
 
     override fun onCreateScreen(intent: Intent): Screen {
         val surface = CarVideoSurface(carContext).also { videoSurface = it }
         val appManager = runCatching { carContext.getCarService(AppManager::class.java) }.getOrNull()
         if (appManager == null) {
-            Log.w("ProjectionSession", "no AppManager: falling back to activity projection")
+            Log.w(TAG, "no AppManager: falling back to activity projection")
         } else {
             runCatching { appManager.setSurfaceCallback(surface) }
-                .onFailure { Log.w("ProjectionSession", "surface callback rejected", it) }
+                .onFailure { Log.w(TAG, "surface callback rejected", it) }
             lifecycle.addObserver(object : DefaultLifecycleObserver {
                 override fun onDestroy(owner: LifecycleOwner) {
                     runCatching { appManager.setSurfaceCallback(null) }
+                    carPlay.unbind()
                 }
             })
         }
-        return ChannelListScreen(carContext, surface)
+        return RootScreen(carContext, surface, carPlay)
     }
 
-    private class ChannelListScreen(
+    /**
+     * Bound-service playback. A car session can run with no Activity at all, so
+     * binding is the only legal way to reach the player.
+     */
+    private class CarPlay(private val ctx: CarContext) {
+        private var svc: PlaybackService? = null
+        private var binding = false
+        private var pending: Pair<String, String>? = null
+
+        private val conn = object : ServiceConnection {
+            override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+                svc = (binder as? PlaybackService.LocalBinder)?.getService()
+                binding = false
+                // Apply a request that arrived before the binding completed.
+                pending?.let { (url, title) ->
+                    pending = null
+                    svc?.play(url, title, 0L)
+                }
+            }
+
+            override fun onServiceDisconnected(name: ComponentName?) {
+                svc = null
+            }
+        }
+
+        fun play(url: String, title: String) {
+            if (url.isBlank()) return
+            val ready = svc
+            if (ready != null) {
+                ready.play(url, title, 0L)
+                return
+            }
+            pending = url to title
+            if (binding) return
+            binding = runCatching {
+                ctx.bindService(
+                    Intent(ctx, PlaybackService::class.java),
+                    conn,
+                    Context.BIND_AUTO_CREATE,
+                )
+            }.getOrElse {
+                Log.w(TAG, "bind to playback failed", it)
+                false
+            }
+        }
+
+        fun pause() {
+            runCatching { svc?.pause() }
+        }
+
+        fun unbind() {
+            runCatching { ctx.unbindService(conn) }
+            binding = false
+            svc = null
+        }
+    }
+
+    // ------------------------------------------------------------ screens ---
+
+    /** Favourites first, then one row per provider group — never the flat list. */
+    private class RootScreen(
         private val ctx: CarContext,
         private val video: CarVideoSurface,
+        private val play: CarPlay,
     ) : Screen(ctx) {
 
+        private val repo = (ctx.applicationContext as MyApplication).repository
+
+        init {
+            // A cold start can reach this screen before the stored playlists are
+            // parsed (that work is off-thread now, see PlaylistRepository.init).
+            // Ask for a re-render once they land instead of claiming "no playlist".
+            val job = CoroutineScope(Dispatchers.Main).launch {
+                repo.loadState.first { it }
+                invalidate()
+            }
+            lifecycle.addObserver(object : DefaultLifecycleObserver {
+                override fun onDestroy(owner: LifecycleOwner) {
+                    job.cancel()
+                }
+            })
+        }
+
         override fun onGetTemplate(): Template {
-            val app = ctx.applicationContext as MyApplication
-            val pl = app.repository.activePlaylist
-            val listBuilder = ItemList.Builder()
+            val pl = repo.activePlaylist
+            val list = ItemList.Builder()
 
             if (pl == null || pl.channels.isEmpty()) {
-                listBuilder.addItem(
+                val loading = !repo.loadState.value
+                list.addItem(
                     Row.Builder()
-                        .setTitle("No playlist loaded")
-                        .addText("Add an M3U or Xtream source from the phone app.")
+                        .setTitle(if (loading) "Loading channels…" else "No playlist loaded")
+                        .addText(
+                            if (loading) "Reading your sources from storage."
+                            else "Add an M3U or Xtream source from the phone app."
+                        )
                         .build()
                 )
             } else {
-                pl.channels.forEach { ch ->
-                    val onClick = ParkedOnlyOnClickListener.create {
-                        startChannel(ch)
-                    }
-                    listBuilder.addItem(
+                val favIds = favourites(ctx)
+                val favs = if (favIds.isEmpty()) emptyList()
+                else pl.channels.filter { it.id in favIds }
+                if (favs.isNotEmpty()) {
+                    list.addItem(
                         Row.Builder()
-                            .setTitle(ch.name)
-                            .addText(ch.group)
-                            .setOnClickListener(onClick)
+                            .setTitle("★ Favourites")
+                            .addText("${favs.size} channels")
+                            .setOnClickListener(
+                                ParkedOnlyOnClickListener.create {
+                                    screenManager.push(
+                                        ChannelListScreen(ctx, video, play, "Favourites", favs)
+                                    )
+                                }
+                            )
+                            .build()
+                    )
+                }
+
+                val groups = pl.channels.groupBy { it.group.ifBlank { "Ungrouped" } }
+                groups.keys.sorted().take(MAX_GROUPS).forEach { group ->
+                    val channels = groups.getValue(group)
+                    list.addItem(
+                        Row.Builder()
+                            .setTitle(group)
+                            .addText("${channels.size} channels")
+                            .setOnClickListener(
+                                ParkedOnlyOnClickListener.create {
+                                    screenManager.push(
+                                        ChannelListScreen(ctx, video, play, group, channels)
+                                    )
+                                }
+                            )
+                            .build()
+                    )
+                }
+                if (groups.size > MAX_GROUPS) {
+                    list.addItem(
+                        Row.Builder()
+                            .setTitle("${groups.size - MAX_GROUPS} more groups")
+                            .addText("Browse the rest from the phone app.")
                             .build()
                     )
                 }
             }
 
-            return PlaceListNavigationTemplate.Builder()
+            return ListTemplate.Builder()
                 .setTitle("MYTV — Live")
                 .setHeaderAction(Action.APP_ICON)
-                .setItemList(listBuilder.build())
+                .setSingleList(list.build())
                 .setActionStrip(
                     ActionStrip.Builder()
-                        .addAction(
-                            Action.Builder()
-                                .setTitle("MYTV")
-                                .build()
+                        .addAction(Action.Builder().setTitle("MYTV").build())
+                        .build()
+                )
+                .build()
+        }
+    }
+
+    /** One group's channels, capped so the template always stays small. */
+    private class ChannelListScreen(
+        private val ctx: CarContext,
+        private val video: CarVideoSurface,
+        private val play: CarPlay,
+        private val group: String,
+        private val channels: List<Channel>,
+    ) : Screen(ctx) {
+
+        override fun onGetTemplate(): Template {
+            val list = ItemList.Builder()
+            channels.take(MAX_ROWS).forEach { ch ->
+                list.addItem(
+                    Row.Builder()
+                        .setTitle(ch.name)
+                        .apply { if (ch.group.isNotBlank()) addText(ch.group) }
+                        .setOnClickListener(
+                            ParkedOnlyOnClickListener.create { startChannel(ch) }
                         )
                         .build()
                 )
+            }
+            if (channels.size > MAX_ROWS) {
+                list.addItem(
+                    Row.Builder()
+                        .setTitle("Showing $MAX_ROWS of ${channels.size}")
+                        .addText("Narrow it down from the phone app's search.")
+                        .build()
+                )
+            }
+
+            return ListTemplate.Builder()
+                .setTitle("MYTV — $group")
+                .setHeaderAction(Action.BACK)
+                .setSingleList(list.build())
                 .build()
         }
 
         private fun startChannel(ch: Channel) {
             if (ch.url.isBlank()) return
-            val play = Intent(ctx.applicationContext, PlaybackService::class.java)
-                .setAction(PlaybackService.ACTION_PLAY)
-                .putExtra(PlaybackService.EXTRA_URL, ch.url)
-                .putExtra(PlaybackService.EXTRA_TITLE, ch.name)
-                .putExtra(PlaybackService.EXTRA_POSITION, 0L)
-            ctx.applicationContext.startService(play)
-
+            play.play(ch.url, ch.name)
             video.title = ch.name
-            if (video.lastWidth > 0) {
-                // Surface is live: hand the whole screen to the video.
-                screenManager.push(VideoScreen(ctx, ch.name))
-                return
-            }
-
-            // Host gave us no surface — project the activity instead.
-            val projection = Intent(ctx, ProjectionActivity::class.java)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                .putExtra("title", ch.name)
-            ctx.startActivity(projection)
+            // Push the navigation template FIRST. The host only hands a navigation
+            // app its drawable surface once a NavigationTemplate is on screen, so
+            // waiting for `video.lastWidth > 0` before showing it deadlocked: no
+            // template → no surface → no video. CarVideoSurface draws as soon as
+            // the surface arrives.
+            //
+            // The old fallback (launching ProjectionActivity from here) cannot work:
+            // a car session is a background app, and starting an activity from it is
+            // rejected (`SafeActivityOptions.checkPermissions` RemoteException).
+            screenManager.push(VideoScreen(ctx, play, ch.name))
         }
     }
 
     /**
-     * Bare navigation template: no list, no navigation info, just a Stop action.
+     * Bare navigation template: no list, no navigation info, just Channels/Stop.
      * The car's surface fills everything behind it, so the video gets the screen.
      */
     private class VideoScreen(
         private val ctx: CarContext,
+        private val play: CarPlay,
         private val channel: String,
     ) : Screen(ctx) {
 
@@ -138,7 +299,7 @@ class ProjectionSession : Session() {
             .setActionStrip(
                 ActionStrip.Builder()
                     // Head units have no system back: this pops back to the channel
-                    // list and leaves the stream running, like tapping a row again.
+                    // list and leaves the stream running.
                     .addAction(
                         Action.Builder()
                             .setTitle("Channels")
@@ -148,14 +309,10 @@ class ProjectionSession : Session() {
                     .addAction(
                         Action.Builder()
                             .setTitle("Stop")
+                            .setBackgroundColor(CarColor.BLUE)
                             .setOnClickListener(
                                 ParkedOnlyOnClickListener.create {
-                                    runCatching {
-                                        ctx.applicationContext.startService(
-                                            Intent(ctx.applicationContext, PlaybackService::class.java)
-                                                .setAction(PlaybackService.ACTION_PAUSE)
-                                        )
-                                    }
+                                    play.pause()
                                     screenManager.pop()
                                 }
                             )
@@ -166,5 +323,20 @@ class ProjectionSession : Session() {
             .build()
 
         override fun toString(): String = "VideoScreen($channel)"
+    }
+
+    private companion object {
+        const val TAG = "MYTVCar"
+
+        /** Group rows on the root screen, and channel rows inside one group. */
+        const val MAX_GROUPS = 30
+        const val MAX_ROWS = 60
+
+        /** Same prefs file the phone UI writes, so stars are shared. */
+        fun favourites(ctx: CarContext): Set<String> =
+            ctx.getSharedPreferences("mytv_favorites", Context.MODE_PRIVATE)
+                .getStringSet("ids", emptySet())
+                ?.toSet()
+                .orEmpty()
     }
 }
