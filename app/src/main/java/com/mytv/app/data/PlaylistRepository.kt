@@ -179,6 +179,46 @@ class PlaylistRepository(context: Context) {
         return eps
     }
 
+    /**
+     * Metadata + episode list for a movie or series, from the active Xtream
+     * playlist. Cached because the detail screen is re-entered constantly (and
+     * rotates) while the underlying info never changes mid-session.
+     *
+     * M3U sources have no detail API, so they get a detail built from the entry
+     * itself — the screen then renders the poster, title and any #EXTINF
+     * description instead of failing.
+     */
+    suspend fun detailFor(entry: Entry, isMovie: Boolean): MediaDetail {
+        val pl = activePlaylist
+        val fallback = MediaDetail(
+            id = entry.id,
+            title = entry.name,
+            plot = entry.description,
+            poster = entry.logo,
+        )
+        if (pl == null || pl.kind != PlaylistKind.XTREAM || pl.url.isBlank()) return fallback
+
+        val key = "${pl.url}|${if (isMovie) "m" else "s"}|${entry.id}"
+        detailCache[key]?.let { return it }
+        val fetched = runCatching {
+            if (isMovie) PlaylistParser.movieDetail(pl.url, entry.id)
+            else PlaylistParser.seriesDetail(pl.url, entry.id)
+        }.getOrNull()
+
+        // Keep whatever the provider did say, and fill the gaps from the entry so a
+        // half-empty info blob still renders a usable page.
+        val merged = (fetched ?: fallback).copy(
+            title = fetched?.title?.takeIf { it.isNotBlank() } ?: entry.name,
+            plot = fetched?.plot ?: entry.description,
+            poster = fetched?.poster ?: entry.logo,
+        )
+        detailCache[key] = merged
+        return merged
+    }
+
+    /** Detail pages are per (playlist, id); cheap and safe to keep in memory. */
+    private val detailCache = mutableMapOf<String, MediaDetail>()
+
     private fun persist(list: List<Playlist>) {
         val manifest = JSONArray(list.map { it.name })
         prefs.edit()

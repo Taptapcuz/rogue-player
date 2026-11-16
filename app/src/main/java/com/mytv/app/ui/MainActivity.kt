@@ -57,10 +57,6 @@ class MainActivity : AppCompatActivity() {
     private var sortMode = SortMode.AZ
     private var sortBtn: TextView? = null
 
-    /** Set while a series is open: the list shows its episodes, not posters. */
-    private var openSeries: Entry? = null
-    private var seriesJob: Job? = null
-
     /** Background page builder (single thread so the sorted-list cache stays consistent). */
     private val pageDispatcher =
         java.util.concurrent.Executors.newSingleThreadExecutor { r ->
@@ -98,13 +94,10 @@ class MainActivity : AppCompatActivity() {
 
     private val onClickChannel: (Channel) -> Unit = { ch -> startPlayback(ch.url, ch.name, 0) }
     private val onClickEntry: (Entry, Boolean) -> Unit = { e, isMovie ->
-        // Xtream series have no single stream: open the episode list instead of
-        // trying to play a made-up /series/<id>.mkv URL.
-        if (!isMovie && app.repository.activePlaylist?.kind == PlaylistKind.XTREAM) {
-            openSeriesEntry(e)
-        } else {
-            startPlayback(e.url, e.name, 0)
-        }
+        // A poster tap opens the detail page (art, plot, cast, trailer, Play) instead
+        // of jumping straight into the stream. Series pick their episode there too —
+        // Xtream series have no single stream of their own.
+        startActivity(DetailActivity.intent(this, e, isMovie))
     }
     private val onClickEpisode: (com.mytv.app.data.Episode, String) -> Unit = { ep, seriesTitle ->
         startPlayback(ep.url, "${Titles.clean(seriesTitle)} · ${ep.title}".trim(' ', '·'), 0)
@@ -200,13 +193,6 @@ class MainActivity : AppCompatActivity() {
 
     /** Pop one navigation level, or finish the activity if nothing to undo. */
     private fun goBack() {
-        // A series screen is one level of its own.
-        if (openSeries != null) {
-            openSeries = null
-            seriesJob?.cancel()
-            renderContent(); renderNav(); updateBackButton()
-            return
-        }
         val prev = backStack.removeLastOrNull()
         if (prev == null) {
             finish()
@@ -223,7 +209,7 @@ class MainActivity : AppCompatActivity() {
     /** Show the back arrow only when there's a navigation to undo. */
     private fun updateBackButton() {
         backBtn?.visibility =
-            if (backStack.isNotEmpty() || openSeries != null) View.VISIBLE else View.GONE
+            if (backStack.isNotEmpty()) View.VISIBLE else View.GONE
     }
 
     // ------------------------------------------------------------- chrome ---
@@ -517,16 +503,16 @@ class MainActivity : AppCompatActivity() {
 
         // Playlists get their own manager screen (list + update/delete) instead of
         // jumping straight into the add dialog like before.
-        if (tab == Tab.PLAYLISTS && openSeries == null) {
+        if (tab == Tab.PLAYLISTS) {
             renderPlaylists(col)
             return
         }
 
-        if (openSeries == null) col.addView(filterChips())
+        col.addView(filterChips())
 
         // Movies/Shows render as an adaptive Plex-style poster grid; the live
-        // list and the series episode screen stay single-column.
-        val grid = openSeries == null && (tab == Tab.MOVIES || tab == Tab.SHOWS)
+        // list stays single-column.
+        val grid = tab == Tab.MOVIES || tab == Tab.SHOWS
         val span = if (grid) gridSpanCount() else 1
 
         adapter = BrowseAdapter(
@@ -626,12 +612,6 @@ class MainActivity : AppCompatActivity() {
             adapter.submitList(emptyList())
             tvPlaceholder.visibility = View.VISIBLE
             tvPlaceholder.text = "No playlist yet.\nTap “Playlists” (bottom right) for an M3U link or Xtream login."
-            return
-        }
-
-        // Series drill-in: the list becomes that series' episode list.
-        openSeries?.let { series ->
-            loadSeriesEpisodes(series)
             return
         }
 
@@ -737,35 +717,6 @@ class MainActivity : AppCompatActivity() {
     private fun <T> sortRows(rows: List<T>, mode: SortMode, name: (T) -> String): List<T> {
         val asc = rows.sortedBy { Titles.sortKey(name(it)) }
         return if (mode == SortMode.ZA) asc.asReversed() else asc
-    }
-
-    /** Fetch a series' episodes from the provider and list them. */
-    private fun loadSeriesEpisodes(series: Entry) {
-        tvPlaceholder.visibility = View.GONE
-        val title = Titles.clean(series.name)
-        adapter.submitList(listOf(BrowseItem.SectionTitle(title, "…") as BrowseItem))
-        seriesJob?.cancel()
-        seriesJob = scope.launch {
-            val eps = runCatching { app.repository.episodesFor(series) }.getOrNull().orEmpty()
-            if (openSeries?.id != series.id) return@launch
-            val items = mutableListOf<BrowseItem>()
-            items.add(BrowseItem.SectionTitle(
-                title,
-                if (eps.isEmpty()) "" else "${Titles.count(eps.size)} eps") as BrowseItem)
-            if (eps.isEmpty()) {
-                items.add(BrowseItem.Message(
-                    "No episode list from this provider for “$title”.") as BrowseItem)
-            } else {
-                eps.forEach { items.add(BrowseItem.EpisodeItem(it, title)) }
-            }
-            adapter.submitList(items)
-        }
-    }
-
-    /** Open the episode screen for [e] (series entries have no single stream). */
-    private fun openSeriesEntry(e: Entry) {
-        openSeries = e
-        renderContent(); renderNav(); updateBackButton()
     }
 
     private fun toggleSort() {
@@ -1243,7 +1194,6 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton("Delete") { _, _ ->
                 app.repository.remove(pl.name)
                 selectedGroup = null
-                openSeries = null
                 renderContent()
                 renderNav()
                 reload()

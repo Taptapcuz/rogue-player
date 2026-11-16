@@ -249,10 +249,15 @@ object PlaylistParser {
         val c = credsFrom(baseUrl)
         if (c.user.isBlank() || c.pass.isBlank()) return emptyList()
         val json = fetchText("$baseUrl&action=get_series_info&series_id=$seriesId")
+        return runCatching { parseEpisodes(baseUrl, JSONObject(json)) }.getOrElse { emptyList() }
+    }
+
+    /** Split the `episodes` object of a `get_series_info` reply into [Episode]s. */
+    private fun parseEpisodes(baseUrl: String, root: JSONObject): List<Episode> {
+        val c = credsFrom(baseUrl)
         val out = mutableListOf<Episode>()
+        val eps = root.optJSONObject("episodes") ?: return emptyList()
         try {
-            val root = JSONObject(json)
-            val eps = root.optJSONObject("episodes") ?: return emptyList()
             for (seasonKey in eps.keys()) {
                 val arr = eps.optJSONArray(seasonKey) ?: continue
                 for (i in 0 until arr.length()) {
@@ -264,12 +269,13 @@ object PlaylistParser {
                     out.add(
                         Episode(
                             id = id,
-                            season = o.optInt("season", seasonKey.toIntOrNull() ?: 1),
-                            number = o.optInt("episode_num", i + 1),
+                            season = o.optString("season").toIntOrNull()
+                                ?: seasonKey.toIntOrNull() ?: 1,
+                            number = o.optString("episode_num").toIntOrNull() ?: (i + 1),
                             title = o.optString("title").ifBlank { info?.optString("name").orEmpty() },
                             url = "${c.host}/series/${c.user}/${c.pass}/$id.$ext",
-                            durationSec = o.optString("duration").toIntOrNull()
-                                ?: info?.optString("duration_secs")?.toIntOrNull(),
+                            durationSec = secondsOf(o.optString("duration"))
+                                ?: secondsOf(info?.optString("duration_secs")),
                             plot = info?.optString("plot")?.ifBlank { null },
                         )
                     )
@@ -279,6 +285,151 @@ object PlaylistParser {
             Log.w(TAG, "episode parse failed", t)
         }
         return out.sortedWith(compareBy({ it.season }, { it.number }))
+    }
+
+    // ------------------------------------------------------- detail pages ---
+
+    /** Metadata for a movie (`get_vod_info`); null when the provider has none. */
+    suspend fun movieDetail(baseUrl: String, streamId: String): MediaDetail? =
+        withContext(Dispatchers.IO) {
+            val root = runCatching {
+                JSONObject(fetchText("$baseUrl&action=get_vod_info&vod_id=$streamId"))
+            }.getOrNull() ?: return@withContext null
+            val info = root.optJSONObject("info") ?: return@withContext null
+            detailFrom(info, streamId)
+        }
+
+    /**
+     * Metadata + full episode list for a series (`get_series_info`). One request
+     * serves both, which is why the episode parse is shared with [loadEpisodes].
+     */
+    suspend fun seriesDetail(baseUrl: String, seriesId: String): MediaDetail? =
+        withContext(Dispatchers.IO) {
+            val root = runCatching {
+                JSONObject(fetchText("$baseUrl&action=get_series_info&series_id=$seriesId"))
+            }.getOrNull() ?: return@withContext null
+            val info = root.optJSONObject("info")
+            val eps = runCatching { parseEpisodes(baseUrl, root) }.getOrElse { emptyList() }
+            // Some panels return only episodes and no info blob at all; still worth
+            // showing that season/episode list rather than an empty screen.
+            if (info == null && eps.isEmpty()) return@withContext null
+            val detail = info?.let { detailFrom(it, seriesId) }
+                ?: MediaDetail(id = seriesId, title = "")
+            detail.copy(episodes = eps)
+        }
+
+    /**
+     * Read the uneven `info` blob into a [MediaDetail]. Panels disagree on key
+     * names (`releaseDate`/`releasedate`, `movie_image`/`cover`, `duration` as
+     * "01:34:00" vs seconds), so every field tries a few spellings.
+     */
+    private fun detailFrom(info: JSONObject, id: String): MediaDetail {
+        val release = info.str("releaseDate", "releasedate", "release_date", "released")
+        val year = info.str("year") ?: release?.take(4)?.takeIf { it.all(Char::isDigit) }
+        return MediaDetail(
+            id = id,
+            title = info.str("name", "title", "o_name").orEmpty(),
+            plot = info.str("plot", "description", "overview"),
+            year = year,
+            genre = info.str("genre"),
+            rating = info.str("rating", "rating_5based", "vote_average"),
+            duration = durationLabel(
+                info.str("duration"),
+                info.str("duration_secs"),
+                info.str("episode_run_time"),
+            ),
+            cast = info.str("cast", "actors"),
+            director = info.str("director"),
+            country = info.str("country"),
+            backdrop = firstImage(info, "backdrop_path", "backdrop"),
+            poster = firstImage(info, "movie_image", "cover", "stream_icon"),
+            trailer = trailerId(info.str("youtube_trailer", "trailer", "yt_trailer_code")),
+        )
+    }
+
+    /** First non-blank string among [keys], ignoring JSON nulls and empty arrays. */
+    private fun JSONObject.str(vararg keys: String): String? {
+        for (k in keys) {
+            val raw = opt(k) ?: continue
+            val text = when (raw) {
+                // Backdrops arrive as ["url"] on some panels — fall through to it.
+                is JSONArray -> (0 until raw.length()).firstNotNullOfOrNull { i ->
+                    raw.optString(i).takeIf { it.isNotBlank() }
+                }
+                else -> raw.toString()
+            }?.trim()
+            if (!text.isNullOrBlank() && text != "null" && text != "[]") return text
+        }
+        return null
+    }
+
+    /** Pull an image URL out of a field that may be a string or an array. */
+    private fun firstImage(info: JSONObject, vararg keys: String): String? {
+        val value = info.str(*keys) ?: return null
+        val trimmed = value.trim()
+        return when {
+            trimmed.startsWith("[") -> runCatching {
+                val arr = JSONArray(trimmed)
+                (0 until arr.length()).firstNotNullOfOrNull { i ->
+                    arr.optString(i).takeIf { it.isNotBlank() }
+                }
+            }.getOrNull()
+            trimmed.startsWith("http") -> trimmed
+            else -> null
+        }
+    }
+
+    /**
+     * `youtube_trailer` is a bare id on most panels but a full URL on some, and a
+     * few send nothing usable. Keep only the id when we can recognise one.
+     */
+    private fun trailerId(raw: String?): String? {
+        val v = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        val match = Regex("(?:v=|youtu\\.be/|embed/|shorts/)([A-Za-z0-9_-]{6,})").find(v)
+        if (match != null) return match.groupValues[1]
+        return if (v.matches(Regex("[A-Za-z0-9_-]{6,}"))) v else null
+    }
+
+    /** Normalise runtime: seconds ("8040"), "HH:MM(:SS)" or minutes ("134"). */
+    private fun durationLabel(vararg candidates: String?): String? {
+        for (raw in candidates) {
+            val secs = secondsOf(raw) ?: continue
+            val h = secs / 3600
+            val m = (secs % 3600) / 60
+            return when {
+                h > 0 && m > 0 -> "${h}h ${m}m"
+                h > 0 -> "${h}h"
+                m > 0 -> "${m}m"
+                else -> null
+            }
+        }
+        return null
+    }
+
+    /**
+     * Runtime/episode length in seconds from whatever the panel sent. Xtream panels
+     * use every shape: "00:45:00", "45" (minutes) and plain seconds.
+     */
+    private fun secondsOf(raw: String?): Int? {
+        val v = raw?.trim()?.takeIf { it.isNotEmpty() && it != "0" } ?: return null
+        if (v.contains(':')) {
+            val parts = v.split(':').mapNotNull { it.trim().toIntOrNull() }
+            return when (parts.size) {
+                3 -> parts[0] * 3600 + parts[1] * 60 + parts[2]
+                2 -> parts[0] * 60 + parts[1]
+                else -> null
+            }?.takeIf { it > 0 }
+        }
+        val n = v.toIntOrNull() ?: return null
+        return when {
+            n >= 3600 -> n            // already seconds
+            // A bare number in minutes. Below 10 it is never a runtime — panels put
+            // episode counts and other junk in `duration`/`episode_run_time`
+            // ("8" for an 8-episode show), which must not render as "8m".
+            n in 10..300 -> n * 60
+            n >= 301 -> n
+            else -> null
+        }
     }
 
     /** Build a direct movie/series URL from a player_api base URL. */

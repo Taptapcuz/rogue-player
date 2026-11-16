@@ -40,6 +40,13 @@
             android:launchMode="singleTask"
             android:theme="@style/Theme.MYTV" />
 
+        <!-- Movie / show detail page (metadata, trailer, play, episodes) -->
+        <activity
+            android:name=".ui.DetailActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize"
+            android:theme="@style/Theme.MYTV" />
+
         <!-- TiViMate-style TV guide -->
         <activity
             android:name=".ui.GuideActivity"

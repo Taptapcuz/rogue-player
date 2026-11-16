@@ -53,6 +53,35 @@ data class Episode(
     val plot: String? = null,
 )
 
+/**
+ * Rich metadata for one movie or series, from Xtream `get_vod_info` /
+ * `get_series_info`. Every field is optional: panels fill these in unevenly, and
+ * the detail screen has to render whatever did come back instead of a blank page.
+ */
+data class MediaDetail(
+    val id: String,
+    val title: String,
+    val plot: String? = null,
+    val year: String? = null,
+    val genre: String? = null,
+    val rating: String? = null,
+    /** Human-readable runtime ("2h 14m"), or null when the provider sent none. */
+    val duration: String? = null,
+    val cast: String? = null,
+    val director: String? = null,
+    val country: String? = null,
+    val backdrop: String? = null,
+    val poster: String? = null,
+    /** YouTube id or URL — `youtube_trailer` on most panels. */
+    val trailer: String? = null,
+    val episodes: List<Episode> = emptyList(),
+) {
+    /** Season numbers present in [episodes], ascending. */
+    val seasons: List<Int> get() = episodes.map { it.season }.distinct().sorted()
+
+    fun episodesOf(season: Int): List<Episode> = episodes.filter { it.season == season }
+}
+
 /** A playlist source the user added. */
 data class Playlist(
     val name: String,
