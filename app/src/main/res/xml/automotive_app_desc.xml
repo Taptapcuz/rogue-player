@@ -1,8 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <automotiveApp>
     <uses name="template" />
-    <!-- Navigation category so Android Auto grants unrestricted surface access.
-         This is the projection route: we draw our own (video) content.
-         Required for the app to appear under Android Auto. -->
-    <uses name="navigation" />
+    <!-- Only "template" belongs here. The legacy <uses name="navigation"/> entry
+         declares the deprecated auto-sdk navigation route (needs the unpublished
+         auto-sdk + a Google allowlist), which this app does not use. -->
 </automotiveApp>

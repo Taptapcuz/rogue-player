@@ -19,6 +19,13 @@
         android:usesCleartextTraffic="true"
         android:supportsRtl="true">
 
+        <!-- Android Auto only reads car capability from THIS element, and only when it
+             sits directly under <application>. It used to be nested inside the
+             CarAppService, where the gearhead validator never looks. -->
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc" />
+
         <!-- ============ Phone UI ============ -->
         <activity
             android:name=".ui.MainActivity"
@@ -54,9 +61,12 @@
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize"
             android:theme="@style/Theme.MYTV" />
 
-        <!-- ============ Car projection (Fermata-style) ============ -->
+        <!-- ============ Car projection (Car App Library templates) ============ -->
         <!-- CarAppService: the projection service Android Auto binds to.
-             NAVIGATION category grants unrestricted surface drawing. -->
+             NAVIGATION category grants unrestricted surface drawing. The legacy
+             com.google.android.gms.car.category.CATEGORY_PROJECTION entry and the
+             Fermata-style projection route are gone: that path needs the unpublished
+             auto-sdk plus a Google allowlist, so it can never work here. -->
         <service
             android:name=".car.MYTVCarService"
             android:exported="true"
@@ -64,11 +74,12 @@
             <intent-filter>
                 <action android:name="androidx.car.app.CarAppService" />
                 <category android:name="androidx.car.app.category.NAVIGATION" />
-                <category android:name="com.google.android.gms.car.category.CATEGORY_PROJECTION" />
             </intent-filter>
+            <!-- Lowest car API level we support; Android Auto uses it to decide
+                 whether to offer the app at all. -->
             <meta-data
-                android:name="com.google.android.gms.car.application"
-                android:resource="@xml/automotive_app_desc" />
+                android:name="androidx.car.app.minCarApiLevel"
+                android:value="1" />
         </service>
 
         <!-- Projection activity: renders the phone's surface onto the car screen -->
