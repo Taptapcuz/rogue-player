@@ -12,12 +12,12 @@ import androidx.car.app.Screen
 import androidx.car.app.Session
 import androidx.car.app.model.Action
 import androidx.car.app.model.ActionStrip
-import androidx.car.app.model.CarColor
 import androidx.car.app.model.ItemList
 import androidx.car.app.model.ListTemplate
 import androidx.car.app.model.ParkedOnlyOnClickListener
 import androidx.car.app.model.Row
 import androidx.car.app.model.Template
+import androidx.car.app.navigation.model.RoutingInfo
 import androidx.car.app.navigation.model.NavigationTemplate
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
@@ -55,20 +55,13 @@ class ProjectionSession : Session() {
     private val carPlay by lazy { CarPlay(carContext) }
 
     override fun onCreateScreen(intent: Intent): Screen {
-        val surface = CarVideoSurface(carContext).also { videoSurface = it }
-        val appManager = runCatching { carContext.getCarService(AppManager::class.java) }.getOrNull()
-        if (appManager == null) {
-            Log.w(TAG, "no AppManager: falling back to activity projection")
-        } else {
-            runCatching { appManager.setSurfaceCallback(surface) }
-                .onFailure { Log.w(TAG, "surface callback rejected", it) }
-            lifecycle.addObserver(object : DefaultLifecycleObserver {
-                override fun onDestroy(owner: LifecycleOwner) {
-                    runCatching { appManager.setSurfaceCallback(null) }
-                    carPlay.unbind()
-                }
-            })
-        }
+        val surface = CarVideoSurface(carContext) { s -> carPlay.renderTo(s) }
+            .also { videoSurface = it }
+        // The surface callback is registered by VideoScreen, not here: AA allocates
+        // a navigation surface per *screen*, and the sample (android/car-samples
+        // navigation SurfaceRenderer) registers it from the screen's lifecycle. Doing
+        // it at session level meant the host handed us a surface while no navigation
+        // template was up, and reclaimed it ~180ms later.
         return RootScreen(carContext, surface, carPlay)
     }
 
@@ -81,6 +74,9 @@ class ProjectionSession : Session() {
         private var binding = false
         private var pending: Pair<String, String>? = null
 
+        /** Surface to attach once the binding lands. */
+        private var pendingSurface: android.view.Surface? = null
+
         private val conn = object : ServiceConnection {
             override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
                 svc = (binder as? PlaybackService.LocalBinder)?.getService()
@@ -89,6 +85,9 @@ class ProjectionSession : Session() {
                 pending?.let { (url, title) ->
                     pending = null
                     svc?.play(url, title, 0L)
+                }
+                pendingSurface?.let { surface ->
+                    svc?.setVideoSurface(surface)
                 }
             }
 
@@ -114,6 +113,27 @@ class ProjectionSession : Session() {
                 )
             }.getOrElse {
                 Log.w(TAG, "bind to playback failed", it)
+                false
+            }
+        }
+
+        /** Attach/detach the car's surface as the host hands it over. */
+        fun renderTo(surface: android.view.Surface?) {
+            val ready = svc
+            if (ready != null) {
+                ready.setVideoSurface(surface)
+                return
+            }
+            pendingSurface = surface
+            if (binding) return
+            binding = runCatching {
+                ctx.bindService(
+                    Intent(ctx, PlaybackService::class.java),
+                    conn,
+                    Context.BIND_AUTO_CREATE,
+                )
+            }.getOrElse {
+                Log.w(TAG, "bind for surface failed", it)
                 false
             }
         }
@@ -271,7 +291,6 @@ class ProjectionSession : Session() {
         private fun startChannel(ch: Channel) {
             if (ch.url.isBlank()) return
             play.play(ch.url, ch.name)
-            video.title = ch.name
             // Push the navigation template FIRST. The host only hands a navigation
             // app its drawable surface once a NavigationTemplate is on screen, so
             // waiting for `video.lastWidth > 0` before showing it deadlocked: no
@@ -281,7 +300,7 @@ class ProjectionSession : Session() {
             // The old fallback (launching ProjectionActivity from here) cannot work:
             // a car session is a background app, and starting an activity from it is
             // rejected (`SafeActivityOptions.checkPermissions` RemoteException).
-            screenManager.push(VideoScreen(ctx, play, ch.name))
+            screenManager.push(VideoScreen(ctx, video, play, ch.name))
         }
     }
 
@@ -291,11 +310,35 @@ class ProjectionSession : Session() {
      */
     private class VideoScreen(
         private val ctx: CarContext,
+        private val video: CarVideoSurface,
         private val play: CarPlay,
         private val channel: String,
     ) : Screen(ctx) {
 
+        init {
+            // Register the surface callback for exactly this screen's lifetime, the
+            // way the Car App Library navigation sample does. AA hands a navigation
+            // app its drawable surface only for the screen that shows a navigation
+            // template with navigation info attached.
+            lifecycle.addObserver(object : DefaultLifecycleObserver {
+                override fun onCreate(owner: LifecycleOwner) {
+                    runCatching { ctx.getCarService(AppManager::class.java).setSurfaceCallback(video) }
+                        .onFailure { Log.w(TAG, "surface callback rejected", it) }
+                }
+
+                override fun onDestroy(owner: LifecycleOwner) {
+                    runCatching { ctx.getCarService(AppManager::class.java).setSurfaceCallback(null) }
+                }
+            })
+        }
+
         override fun onGetTemplate(): Template = NavigationTemplate.Builder()
+            // Without navigation info the host treats the template as "no active
+            // navigation", collapses the map area and destroys the surface — which is
+            // what killed the video ~180ms after it started. RoutingInfo(loading) is
+            // the same state Google's sample uses mid-reroute: it declares that a
+            // navigation session is in progress without claiming a route we don't have.
+            .setNavigationInfo(RoutingInfo.Builder().setLoading(true).build())
             .setActionStrip(
                 ActionStrip.Builder()
                     // Head units have no system back: this pops back to the channel
@@ -309,7 +352,6 @@ class ProjectionSession : Session() {
                     .addAction(
                         Action.Builder()
                             .setTitle("Stop")
-                            .setBackgroundColor(CarColor.BLUE)
                             .setOnClickListener(
                                 ParkedOnlyOnClickListener.create {
                                     play.pause()

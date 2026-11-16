@@ -130,6 +130,14 @@ class PlaybackService : Service() {
         refreshState()
     }
 
+    /**
+     * Render the player's video onto a surface the car host owns (Android Auto hands
+     * a navigation app one drawable Surface). Passing null detaches it again.
+     */
+    fun setVideoSurface(surface: android.view.Surface?) {
+        runCatching { getPlayer().setVideoSurface(surface) }
+    }
+
     fun stop() {
         Log.d("MYTVPlay", "stop()")
         player?.let { exo ->
