@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Clean (publish-safe) edition label. Personal clone keeps the plain "MYTV". -->
+    <string name="app_name">MYTV Clean</string>
+    <string name="car_service_label">MYTV Clean in car</string>
+</resources>

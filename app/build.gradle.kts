@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "com.mytv.app"
+    namespace = "com.rogueplayer"
     compileSdk = 36
 
     defaultConfig {
@@ -20,6 +20,26 @@ android {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
+    }
+
+    // Two installable versions of the same app, side by side on one device.
+    //  - "clone" keeps the personal IMPlayer-style build (com.mytv.app).
+    //  - "clean" is the publish-safe redesign (own app id + label) built part by part.
+    // A different applicationId lets both live on one phone at the same time.
+    // Visual differences for "clean" go in app/src/clean/... overrides; shared
+    // code stays in app/src/main.
+    flavorDimensions += "edition"
+    productFlavors {
+        create("clone") {
+            dimension = "edition"
+            applicationId = "com.mytv.app"
+            versionName = "1.0-clone"
+        }
+        create("clean") {
+            dimension = "edition"
+            applicationId = "com.mytv.app.clean"
+            versionName = "1.0-clean"
         }
     }
 
@@ -55,6 +75,13 @@ dependencies {
     implementation("androidx.media3:media3-datasource-okhttp:1.5.1")
     implementation("androidx.media3:media3-session:1.5.1")
     implementation("androidx.media3:media3-ui:1.5.1")
+
+    // Classic media session: lets the car YouTube screen hold an ACTIVE media session
+    // so Android Auto routes its audio as media. AA's focus manager reads
+    // MediaSessionManager.getActiveSessions(); Media3's "active" state is
+    // notification-driven and unreliable from a car session with no foreground
+    // service, so this explicit isActive() is the dependable route.
+    implementation("androidx.media:media:1.7.0")
 
     // Android Auto / Android for Cars (Car App Library)
     implementation("androidx.car.app:app:1.7.0")
