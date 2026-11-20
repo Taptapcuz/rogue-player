@@ -67,6 +67,8 @@ class PlayerActivity : AppCompatActivity() {
     private var vlcSeek: android.widget.SeekBar? = null
     private var vlcTime: TextView? = null
     private var vlcBar: View? = null
+    /** True while a finger is on the seek bar, so the ticker stops fighting it. */
+    private var vlcSeeking = false
 
     /**
      * The title/aspect bar used to sit over the video permanently, which read as
@@ -170,8 +172,14 @@ class PlayerActivity : AppCompatActivity() {
         // ---- engine routing -------------------------------------------------
         // VLC is phone-only: the car path needs ExoPlayer's media-session/audio-attribute
         // wiring or Android Auto plays picture with no sound.
-        val useVlc = UiSettings.engine(this) == UiSettings.ENGINE_VLC
-        if (useVlc) {
+        val engine = UiSettings.engine(this)
+        if (engine == UiSettings.ENGINE_EXTERNAL) {
+            // Hand the stream to the VLC app and get out of the way. Everything else in the
+            // app (lists, guide, car) still works; only playback leaves the process.
+            handOffToExternal(lastUrl)
+            return
+        }
+        if (engine == UiSettings.ENGINE_VLC) {
             playerView?.visibility = View.GONE
             startVlcEngine()
         }
@@ -297,6 +305,39 @@ class PlayerActivity : AppCompatActivity() {
     }
 
 
+
+    /**
+     * Launch an installed player (VLC) with the stream URL.
+     *
+     * Prefers org.videolan.vlc; falls back to any app that handles a video MIME type, then to a share
+     * sheet. The bound ExoPlayer is stopped first so the two players can't fight over audio.
+     *
+     * NOTE: the panel resets connections from non-browser user agents, and an external app
+     * sends its own UA — so a stream that plays in-app may be refused here. That is the
+     * provider's rule, not something this app can override on VLC's behalf.
+     */
+    private fun handOffToExternal(url: String) {
+        if (url.isBlank()) { finish(); return }
+        svc?.let { runCatching { it.stop() } }
+        val uri = android.net.Uri.parse(url)
+        val play = android.content.Intent(android.content.Intent.ACTION_VIEW, uri)
+
+        val toVlc = android.content.Intent(play).setPackage("org.videolan.vlc")
+        val launched = runCatching { startActivity(toVlc); true }.getOrDefault(false)
+        if (!launched) {
+            val typed = android.content.Intent(play).apply {
+                setDataAndType(uri, if (url.contains(".m3u8", true)) "application/x-mpegURL" else "video/*")
+                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            runCatching {
+                startActivity(android.content.Intent.createChooser(typed, "Play with"))
+            }.onFailure {
+                android.widget.Toast.makeText(this, "No player app found", android.widget.Toast.LENGTH_LONG).show()
+            }
+        }
+        finish()
+    }
+
     /**
      * libVLC path: a SurfaceView under the existing chrome, plus one play/pause button in the
      * top bar (media3's controller can't drive VLC, so the transport control is ours).
@@ -335,11 +376,25 @@ class PlayerActivity : AppCompatActivity() {
             max = 1000
             progress = 0
             setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(sb: android.widget.SeekBar, value: Int, fromUser: Boolean) {}
-                override fun onStartTrackingTouch(sb: android.widget.SeekBar) {}
+                override fun onProgressChanged(sb: android.widget.SeekBar, value: Int, fromUser: Boolean) {
+                    // Dragging: show the target time immediately, then seek once on release.
+                    if (fromUser) {
+                        val total = vlc?.lengthMs() ?: 0L
+                        if (total > 0) {
+                            val target = total * value / sb.max
+                            vlcTime?.text = "${clock(target)} / ${clock(total)}"
+                        }
+                    }
+                }
+
+                override fun onStartTrackingTouch(sb: android.widget.SeekBar) {
+                    vlcSeeking = true
+                }
+
                 override fun onStopTrackingTouch(sb: android.widget.SeekBar) {
                     val total = vlc?.lengthMs() ?: 0L
-                    if (total > 0) vlc?.seekTo(total * sb.progress / 1000)
+                    if (total > 0) vlc?.seekTo(total * sb.progress / sb.max)
+                    vlcSeeking = false
                 }
             })
         }
@@ -383,14 +438,14 @@ class PlayerActivity : AppCompatActivity() {
                 val total = engine.lengthMs()
                 val seekable = engine.canSeek() && total > 0
                 vlcBar?.visibility = if (seekable) View.VISIBLE else View.GONE
-                if (seekable) {
+                if (seekable && !vlcSeeking) {
                     val pos = engine.positionMs()
                     vlcTime?.text = "${clock(pos)} / ${clock(total)}"
-                    if (vlcSeek?.isPressed != true) {
-                        vlcSeek?.progress = (pos * 1000 / total).toInt()
-                    }
+                    // Progress is a fraction of the SAME total the clock shows, so the thumb
+                    // and the time can never disagree by more than one tick.
+                    vlcSeek?.progress = ((pos.toDouble() / total) * (vlcSeek?.max ?: 1000)).toInt()
                 }
-                handler.postDelayed(this, 500)
+                handler.postDelayed(this, 250)
             }
         }
         handler.post(tick)

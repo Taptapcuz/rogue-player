@@ -123,18 +123,30 @@ class SettingsActivity : AppCompatActivity() {
         val engine = UiSettings.engine(this)
         row(
             title = "Player engine",
-            sub = if (engine == UiSettings.ENGINE_VLC) "VLC · phone only (car uses ExoPlayer)"
-                  else "ExoPlayer",
+            sub = when (engine) {
+                UiSettings.ENGINE_VLC -> "VLC (built in) · phone only, car uses ExoPlayer"
+                // Measured: the panel refuses VLC's own UA (VLC/3.x LibVLC/3.x) with "read
+                // error / failed to read answer", so the external app cannot play this
+                // provider. The built-in engine works because we override the UA.
+                UiSettings.ENGINE_EXTERNAL -> "VLC app (external) · provider may refuse VLC's UA"
+                else -> "ExoPlayer"
+            },
             icon = "◈",
             onClick = {
-                val current = if (UiSettings.engine(this) == UiSettings.ENGINE_VLC) 1 else 0
+                val current = when (UiSettings.engine(this)) {
+                    UiSettings.ENGINE_VLC -> 1
+                    UiSettings.ENGINE_EXTERNAL -> 2
+                    else -> 0
+                }
                 AlertDialog.Builder(this)
                     .setTitle("Player engine")
                     .setSingleChoiceItems(UiSettings.ENGINE_NAMES, current) { d, which ->
-                        UiSettings.prefs(this).edit().putString(
-                            UiSettings.KEY_ENGINE,
-                            if (which == 1) UiSettings.ENGINE_VLC else UiSettings.ENGINE_EXO
-                        ).apply()
+                        val id = when (which) {
+                            1 -> UiSettings.ENGINE_VLC
+                            2 -> UiSettings.ENGINE_EXTERNAL
+                            else -> UiSettings.ENGINE_EXO
+                        }
+                        UiSettings.prefs(this).edit().putString(UiSettings.KEY_ENGINE, id).apply()
                         d.dismiss()
                         render()
                     }

@@ -28,11 +28,20 @@ class VlcEngine(context: Context) {
     private val libVlc: LibVLC = LibVLC(
         context,
         arrayListOf(
-            "--no-drop-late-frames",
-            "--no-skip-frames",
+            // Do NOT pass --no-drop-late-frames / --no-skip-frames: those forbid VLC from
+            // dropping late video frames, so on a stream that stalls the picture drifts ahead
+            // of the audio and the clock (which the seek bar follows) stops matching. Sync
+            // beats never-dropping a frame.
             "--audio-time-stretch",
-            // Live HLS from this panel: 1.5 s of buffer avoids the stutter ExoPlayer masked.
-            "--network-caching=1500",
+            "--avcodec-hw=none",
+            // VLC's clock-sync heuristics drift on Android with a network source and hardware
+            // decode: audio lags the picture and the reported time (the seek bar) follows the
+            // picture. Disabling jitter compensation + clock synchronisation is the known fix.
+            "--clock-jitter=0",
+            "--clock-synchro=0",
+            // Live HLS from this panel: 1 s of buffer is enough and shortens seek latency.
+            "--network-caching=1000",
+            "--file-caching=1000",
         )
     )
 
@@ -84,7 +93,11 @@ class VlcEngine(context: Context) {
             val media = Media(libVlc, Uri.parse(url))
             // Hardware first with software fallback — VLC flips automatically when a codec
             // is unsupported, which is the whole reason this engine is here.
-            media.setHWDecoderEnabled(true, false)
+            // SOFTWARE decode on purpose. VLC's MediaCodec path renders straight to the
+            // surface without the renderer's timing, so frames appear early and the audio
+            // sounds late ("audio and bar not synced"). Software decode costs CPU but keeps
+            // A/V in step — and codec coverage is the whole point of this engine.
+            media.setHWDecoderEnabled(false, false)
             // This panel resets connections from non-browser user agents (VLC/3.x is refused
             // outright: "HTTP connection failure", "Connection reset by peer"). Same UA the
             // ExoPlayer path sends, or nothing plays.
