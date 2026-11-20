@@ -15,8 +15,10 @@ import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.view.SurfaceView
+import android.view.Gravity
 import android.widget.FrameLayout
 import android.widget.ProgressBar
+import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.media3.common.C
@@ -62,6 +64,9 @@ class PlayerActivity : AppCompatActivity() {
     private var vlc: VlcEngine? = null
     private var vlcLayout: org.videolan.libvlc.util.VLCVideoLayout? = null
     private var playPauseBtn: TextView? = null
+    private var vlcSeek: android.widget.SeekBar? = null
+    private var vlcTime: TextView? = null
+    private var vlcBar: View? = null
 
     /**
      * The title/aspect bar used to sit over the video permanently, which read as
@@ -315,6 +320,42 @@ class PlayerActivity : AppCompatActivity() {
         vlc = engine
         vlcLayout = videoLayout
 
+        // Seek bar + clock, VOD only (a live channel has no timeline to scrub).
+        val bottom = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundColor(Color.parseColor("#CC000000"))
+            setPadding(dp(14), dp(8), dp(14), dp(8))
+        }
+        val time = TextView(this).apply {
+            textSize = 12f
+            setTextColor(Color.parseColor("#F3F5FF"))
+        }
+        val seek = android.widget.SeekBar(this).apply {
+            max = 1000
+            progress = 0
+            setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: android.widget.SeekBar, value: Int, fromUser: Boolean) {}
+                override fun onStartTrackingTouch(sb: android.widget.SeekBar) {}
+                override fun onStopTrackingTouch(sb: android.widget.SeekBar) {
+                    val total = vlc?.lengthMs() ?: 0L
+                    if (total > 0) vlc?.seekTo(total * sb.progress / 1000)
+                }
+            })
+        }
+        bottom.addView(seek, LinearLayout.LayoutParams(0, dp(28), 1f))
+        bottom.addView(time, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { marginStart = dp(12) })
+        root.addView(bottom, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+            Gravity.BOTTOM))
+        vlcBar = bottom
+        vlcSeek = seek
+        vlcTime = time
+        startVlcTicker()
+        applyVlcAspect(aspect)
+
         // Transport button in the top bar, before the aspect control.
         val bar = findViewById<View>(R.id.player_top_bar) as? android.view.ViewGroup
         playPauseBtn = TextView(this).apply {
@@ -332,6 +373,48 @@ class PlayerActivity : AppCompatActivity() {
             android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
             android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
         ).apply { marginStart = dp(10) })
+    }
+
+    /** Drives the seek bar/clock from VLC; VOD only, so a live stream hides the bar. */
+    private fun startVlcTicker() {
+        val tick = object : Runnable {
+            override fun run() {
+                val engine = vlc ?: return
+                val total = engine.lengthMs()
+                val seekable = engine.canSeek() && total > 0
+                vlcBar?.visibility = if (seekable) View.VISIBLE else View.GONE
+                if (seekable) {
+                    val pos = engine.positionMs()
+                    vlcTime?.text = "${clock(pos)} / ${clock(total)}"
+                    if (vlcSeek?.isPressed != true) {
+                        vlcSeek?.progress = (pos * 1000 / total).toInt()
+                    }
+                }
+                handler.postDelayed(this, 500)
+            }
+        }
+        handler.post(tick)
+    }
+
+    private val handler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    private fun clock(ms: Long): String {
+        val s = (ms / 1000).coerceAtLeast(0)
+        return String.format(Locale.US, "%d:%02d", s / 60, s % 60)
+    }
+
+    /** Aspect menu → VLC's own scale types; the ExoPlayer mapping is a different enum. */
+    private fun applyVlcAspect(mode: AspectMode) {
+        val engine = vlc ?: return
+        engine.videoScale(
+            when (mode) {
+                AspectMode.AUTO -> org.videolan.libvlc.MediaPlayer.ScaleType.SURFACE_BEST_FIT
+                AspectMode.R169 -> org.videolan.libvlc.MediaPlayer.ScaleType.SURFACE_16_9
+                AspectMode.R43 -> org.videolan.libvlc.MediaPlayer.ScaleType.SURFACE_4_3
+                AspectMode.ZOOM -> org.videolan.libvlc.MediaPlayer.ScaleType.SURFACE_FILL
+                AspectMode.STRETCH -> org.videolan.libvlc.MediaPlayer.ScaleType.SURFACE_FIT_SCREEN
+            }
+        )
     }
 
     /** Keep the VLC transport glyph honest; [state] null means "re-read the engine". */
@@ -399,7 +482,7 @@ class PlayerActivity : AppCompatActivity() {
             .setSingleChoiceItems(modes.map { it.label }.toTypedArray(), modes.indexOf(aspect)) { d, which ->
                 aspect = modes[which]
                 prefs().edit().putString("aspect", aspect.name).apply()
-                applyAspect()
+                if (vlc != null) applyVlcAspect(aspect) else applyAspect()
                 d.dismiss()
             }
             .setNegativeButton("Cancel", null)

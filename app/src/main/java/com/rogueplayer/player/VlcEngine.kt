@@ -101,6 +101,21 @@ class VlcEngine(context: Context) {
 
     fun isPlaying(): Boolean = runCatching { player.isPlaying }.getOrDefault(false)
 
+    /** Map the app's aspect modes onto VLC's own scale types. */
+    fun videoScale(scale: MediaPlayer.ScaleType) {
+        runCatching { player.videoScale = scale }
+    }
+
+    fun positionMs(): Long = runCatching { player.time }.getOrDefault(0L).coerceAtLeast(0L)
+
+    fun lengthMs(): Long = runCatching { player.length }.getOrDefault(0L).coerceAtLeast(0L)
+
+    fun canSeek(): Boolean = runCatching { player.isSeekable }.getOrDefault(false)
+
+    fun seekTo(ms: Long) {
+        runCatching { player.setTime(ms, true) }
+    }
+
     fun toggle() {
         runCatching {
             if (player.isPlaying) player.pause() else player.play()
