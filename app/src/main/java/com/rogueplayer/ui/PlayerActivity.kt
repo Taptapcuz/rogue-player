@@ -180,6 +180,10 @@ class PlayerActivity : AppCompatActivity() {
         // .ts file, so it costs no CPU and the picture is untouched. The label doubles as
         // the elapsed-time readout and the stop button.
         recBtn = findViewById(R.id.player_rec)
+        // Recording is a live-only affordance: the car/phone player for a movie or episode is
+        // the same screen as Live TV minus REC. Live channels are HLS (.m3u8); VOD is
+        // .mkv/.mp4 and has no sliding segment window to copy.
+        if (!lastUrl.contains(".m3u8", ignoreCase = true)) recBtn?.visibility = View.GONE
         recBtn?.setOnClickListener {
             if (LiveRecorder.isRecording()) {
                 LiveRecorder.stop()
