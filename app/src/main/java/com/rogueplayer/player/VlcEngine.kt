@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.util.Log
 import android.view.SurfaceView
+import org.videolan.libvlc.util.VLCVideoLayout
 import org.videolan.libvlc.LibVLC
 import org.videolan.libvlc.Media
 import org.videolan.libvlc.MediaPlayer
@@ -60,11 +61,19 @@ class VlcEngine(context: Context) {
         }
     }
 
-    /** Attach the view that video is drawn into. Safe to call once, before or after load(). */
-    fun attach(view: SurfaceView) {
+    /**
+     * Attach the view video is drawn into.
+     *
+     * MUST be [VLCVideoLayout] through `MediaPlayer.attachViews(...)`, not a bare
+     * `SurfaceView` via `vlcVout.setVideoView`: the latter never gets a usable window
+     * ("libvlc window: request N not implemented") and the screen stays pure black even
+     * though the decoder is running (logged `output: 1920x1040`).
+     */
+    fun attach(layout: VLCVideoLayout) {
         runCatching {
-            player.vlcVout.setVideoView(view)
-            if (!player.vlcVout.areViewsAttached()) player.vlcVout.attachViews()
+            player.attachViews(layout, null, false, false)
+            // Fill the screen the way the ExoPlayer path does (PlayerView resize_mode=fit).
+            player.videoScale = MediaPlayer.ScaleType.SURFACE_BEST_FIT
         }.onFailure { Log.w(TAG, "attach failed", it) }
     }
 
@@ -105,7 +114,7 @@ class VlcEngine(context: Context) {
     fun release() {
         runCatching {
             player.stop()
-            player.vlcVout.detachViews()
+            runCatching { player.detachViews() }
             player.release()
             libVlc.release()
         }

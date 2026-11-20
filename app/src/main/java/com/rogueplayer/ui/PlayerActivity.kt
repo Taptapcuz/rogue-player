@@ -60,7 +60,7 @@ class PlayerActivity : AppCompatActivity() {
 
     /** libVLC path (Settings → Player engine = VLC). Null when ExoPlayer is in use. */
     private var vlc: VlcEngine? = null
-    private var vlcSurface: SurfaceView? = null
+    private var vlcLayout: org.videolan.libvlc.util.VLCVideoLayout? = null
     private var playPauseBtn: TextView? = null
 
     /**
@@ -300,23 +300,20 @@ class PlayerActivity : AppCompatActivity() {
         val root = findViewById<FrameLayout>(R.id.player_root) ?: return
         if (lastUrl.isBlank()) return
 
-        val surfaceView = SurfaceView(this).apply {
+        val videoLayout = org.videolan.libvlc.util.VLCVideoLayout(this).apply {
             keepScreenOn = true
             setBackgroundColor(Color.BLACK)
         }
-        root.addView(surfaceView, 0, FrameLayout.LayoutParams(
+        root.addView(videoLayout, 0, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
-
-        // Smaller than the video it overlays: put the new view directly above player_view.
-        (surfaceView.layoutParams as FrameLayout.LayoutParams)
 
         val engine = VlcEngine(this)
         engine.onState = { state -> runOnUiThread { renderVlc(state) } }
-        engine.attach(surfaceView)
+        engine.attach(videoLayout)
         engine.play(lastUrl)
 
         vlc = engine
-        vlcSurface = surfaceView
+        vlcLayout = videoLayout
 
         // Transport button in the top bar, before the aspect control.
         val bar = findViewById<View>(R.id.player_top_bar) as? android.view.ViewGroup
