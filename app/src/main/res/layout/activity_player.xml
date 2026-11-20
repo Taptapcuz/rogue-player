@@ -49,6 +49,22 @@
             android:textStyle="bold" />
 
         <TextView
+            android:id="@+id/player_rec"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="10dp"
+            android:background="#1D1D26"
+            android:gravity="center"
+            android:paddingStart="12dp"
+            android:paddingTop="7dp"
+            android:paddingEnd="12dp"
+            android:paddingBottom="7dp"
+            android:text="⏺ REC"
+            android:textColor="#F3F5FF"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+
+        <TextView
             android:id="@+id/player_aspect"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"

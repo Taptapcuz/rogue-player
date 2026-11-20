@@ -22,8 +22,10 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import java.util.Locale
 import com.rogueplayer.R
 import com.rogueplayer.player.PlaybackService
+import com.rogueplayer.player.LiveRecorder
 import com.rogueplayer.player.PlaybackState
 
 /**
@@ -51,6 +53,7 @@ class PlayerActivity : AppCompatActivity() {
     private var aspect = AspectMode.AUTO
     private var aspectBtn: TextView? = null
     private var topBar: View? = null
+    private var recBtn: TextView? = null
 
     /**
      * The title/aspect bar used to sit over the video permanently, which read as
@@ -173,6 +176,30 @@ class PlayerActivity : AppCompatActivity() {
         showChrome()
         topBar?.postDelayed(hideChromeRunnable, 2500)
 
+        // One-tap recording of the live channel: HLS segments are appended straight to a
+        // .ts file, so it costs no CPU and the picture is untouched. The label doubles as
+        // the elapsed-time readout and the stop button.
+        recBtn = findViewById(R.id.player_rec)
+        recBtn?.setOnClickListener {
+            if (LiveRecorder.isRecording()) {
+                LiveRecorder.stop()
+            } else {
+                LiveRecorder.start(this, lastUrl, lastTitle.ifBlank { "recording" }) { file, error ->
+                    runOnUiThread {
+                        renderRec()
+                        val message = when {
+                            file != null && error != null -> "Recording stopped after a stream error — saved ${file.name}"
+                            file != null -> "Saved ${file.name} (${file.length() / 1_048_576} MB)"
+                            else -> error ?: "Nothing recorded"
+                        }
+                        android.widget.Toast.makeText(this, message, android.widget.Toast.LENGTH_LONG).show()
+                    }
+                }
+                renderRec()
+                startRecTicker()
+            }
+        }
+
         // Close returns to the browse screen.
         findViewById<View>(R.id.player_close).setOnClickListener { finish() }
 
@@ -209,7 +236,16 @@ class PlayerActivity : AppCompatActivity() {
      * makes it impossible to get "stuck".
      */
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
-        if (ev.actionMasked == MotionEvent.ACTION_UP) toggleChrome()
+        if (ev.actionMasked == MotionEvent.ACTION_UP) {
+            val bar = topBar
+            val onChrome = bar != null && bar.visibility == View.VISIBLE &&
+                ev.y >= bar.top && ev.y <= bar.bottom && ev.x >= bar.left && ev.x <= bar.right
+            // A tap that lands on the bar's own controls (REC / aspect / close) must reach
+            // the button. This used to toggle the chrome off on ACTION_UP, i.e. hide the bar
+            // out from under the finger before the click was dispatched — which is why a tap
+            // on REC started a recording but a second tap never stopped it.
+            if (onChrome) showChrome() else toggleChrome()
+        }
         return super.dispatchTouchEvent(ev)
     }
 
@@ -225,8 +261,36 @@ class PlayerActivity : AppCompatActivity() {
         // coming back leaves its preview alive.
         val keep = intent?.getBooleanExtra(EXTRA_KEEP_STREAM, false) == true
         if (isFinishing && !keep) runCatching { svc?.stop() }
+        // Recording follows the player: leaving the player finalises the .ts file.
+        if (isFinishing && LiveRecorder.isRecording()) LiveRecorder.stop()
+        recBtn?.removeCallbacks(recTicker)
         runCatching { unbindService(connection) }
         super.onDestroy()
+    }
+
+    /** REC button label: idle glyph, or elapsed time in red while recording. */
+    private fun renderRec() {
+        val btn = recBtn ?: return
+        if (LiveRecorder.isRecording()) {
+            val secs = LiveRecorder.elapsedMs() / 1000
+            btn.text = String.format(Locale.US, "⏹ %d:%02d", secs / 60, secs % 60)
+            btn.setTextColor(Color.parseColor("#FF5A4F"))
+        } else {
+            btn.text = "⏺ REC"
+            btn.setTextColor(Color.parseColor("#F3F5FF"))
+        }
+    }
+
+    private fun startRecTicker() {
+        recBtn?.removeCallbacks(recTicker)
+        recBtn?.postDelayed(recTicker, 1000)
+    }
+
+    private val recTicker = object : Runnable {
+        override fun run() {
+            renderRec()
+            if (LiveRecorder.isRecording()) recBtn?.postDelayed(this, 1000)
+        }
     }
 
     private fun prefs() = getSharedPreferences("mytv_player", MODE_PRIVATE)
