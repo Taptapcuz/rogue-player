@@ -14,6 +14,7 @@ android {
         versionCode = 1
         versionName = "1.0"
         vectorDrawables { useSupportLibrary = true }
+        ndk { abiFilters += listOf("arm64-v8a") }
     }
 
     buildTypes {
@@ -68,12 +69,17 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.1")
     implementation("androidx.lifecycle:lifecycle-service:2.9.1")
 
-    // Media playback
+    // Media playback — ExoPlayer (default engine)
     implementation("androidx.media3:media3-exoplayer:1.5.1")
     implementation("androidx.media3:media3-exoplayer-hls:1.5.1")
     implementation("androidx.media3:media3-datasource-okhttp:1.5.1")
     implementation("androidx.media3:media3-session:1.5.1")
     implementation("androidx.media3:media3-ui:1.5.1")
+
+    // Optional second engine: libVLC plays containers/codecs ExoPlayer rejects on some
+    // providers (HEVC/AC3, odd HLS, RTSP). Natives are per-ABI and large, so the build is
+    // filtered to arm64 (every device this ships to) — see ndk below.
+    implementation("org.videolan.android:libvlc-all:3.7.7")
 
     // Classic media session: lets the car YouTube screen hold an ACTIVE media session
     // so Android Auto routes its audio as media. AA's focus manager reads

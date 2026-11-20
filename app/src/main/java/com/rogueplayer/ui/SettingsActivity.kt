@@ -117,11 +117,31 @@ class SettingsActivity : AppCompatActivity() {
             onClick = { toggle(UiSettings.KEY_FORCE_HLS, !forceHls) },
             right = switch(forceHls, UiSettings.KEY_FORCE_HLS))
 
+        // Player engine: ExoPlayer (default) or libVLC. ExoPlayer covers the mainstream
+        // cases and is the only engine wired to the car; VLC is the fallback for containers
+        // and codecs the provider serves that ExoPlayer rejects (MKV/HEVC, AC3/E-AC3, odd HLS).
+        val engine = UiSettings.engine(this)
         row(
-            title = "Hardware decoding",
-            sub = "coming soon",
+            title = "Player engine",
+            sub = if (engine == UiSettings.ENGINE_VLC) "VLC · phone only (car uses ExoPlayer)"
+                  else "ExoPlayer",
             icon = "◈",
-            disabled = true)
+            onClick = {
+                val current = if (UiSettings.engine(this) == UiSettings.ENGINE_VLC) 1 else 0
+                AlertDialog.Builder(this)
+                    .setTitle("Player engine")
+                    .setSingleChoiceItems(UiSettings.ENGINE_NAMES, current) { d, which ->
+                        UiSettings.prefs(this).edit().putString(
+                            UiSettings.KEY_ENGINE,
+                            if (which == 1) UiSettings.ENGINE_VLC else UiSettings.ENGINE_EXO
+                        ).apply()
+                        d.dismiss()
+                        render()
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+            },
+            right = accentSwatch(UiSettings.accentIndex(this)))
 
         // -------------------------------- DISPLAY -------------------------------
         section("Display")

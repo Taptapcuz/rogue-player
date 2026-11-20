@@ -19,6 +19,12 @@ object UiSettings {
     const val KEY_BRIGHTNESS = "brightness"  // Int 0..100 (100 = full)
     const val KEY_LAUNCH_LIVE = "launch_live" // true = open Live tab instead of Home
 
+    /** Playback engine: [ENGINE_EXO] (default) or [ENGINE_VLC]. Phone only for now. */
+    const val KEY_ENGINE = "player_engine"
+    const val ENGINE_EXO = "exo"
+    const val ENGINE_VLC = "vlc"
+    val ENGINE_NAMES = arrayOf("ExoPlayer", "VLC")
+
     // Playback
     const val KEY_FORCE_HLS = "force_hls"     // true = route .m3u8 through HlsMediaSource
     const val PLAYER_PREFS = "mytv_player"    // existing player prefs (aspect stored here)
@@ -52,6 +58,12 @@ object UiSettings {
 
     fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    /** Stored engine id; unknown values fall back to ExoPlayer. */
+    fun engine(context: Context): String {
+        val stored = prefs(context).getString(KEY_ENGINE, ENGINE_EXO)
+        return if (stored == ENGINE_VLC) ENGINE_VLC else ENGINE_EXO
+    }
 
     fun accentIndex(context: Context): Int =
         prefs(context).getInt(KEY_ACCENT, 0).coerceIn(0, ACCENT_PALETTES.size - 1)

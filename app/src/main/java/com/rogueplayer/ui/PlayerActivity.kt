@@ -14,6 +14,8 @@ import android.view.View
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
+import android.view.SurfaceView
+import android.widget.FrameLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
@@ -26,6 +28,7 @@ import java.util.Locale
 import com.rogueplayer.R
 import com.rogueplayer.player.PlaybackService
 import com.rogueplayer.player.LiveRecorder
+import com.rogueplayer.player.VlcEngine
 import com.rogueplayer.player.PlaybackState
 
 /**
@@ -54,6 +57,11 @@ class PlayerActivity : AppCompatActivity() {
     private var aspectBtn: TextView? = null
     private var topBar: View? = null
     private var recBtn: TextView? = null
+
+    /** libVLC path (Settings → Player engine = VLC). Null when ExoPlayer is in use. */
+    private var vlc: VlcEngine? = null
+    private var vlcSurface: SurfaceView? = null
+    private var playPauseBtn: TextView? = null
 
     /**
      * The title/aspect bar used to sit over the video permanently, which read as
@@ -154,6 +162,15 @@ class PlayerActivity : AppCompatActivity() {
             titleText?.text = lastTitle
         }
 
+        // ---- engine routing -------------------------------------------------
+        // VLC is phone-only: the car path needs ExoPlayer's media-session/audio-attribute
+        // wiring or Android Auto plays picture with no sound.
+        val useVlc = UiSettings.engine(this) == UiSettings.ENGINE_VLC
+        if (useVlc) {
+            playerView?.visibility = View.GONE
+            startVlcEngine()
+        }
+
         // Aspect / geometry: Auto (stream), 16:9, 4:3, Zoom, Stretch. Persisted.
         aspectBtn = findViewById(R.id.player_aspect)
         aspect = AspectMode.from(prefs().getString("aspect", AspectMode.AUTO.name))
@@ -210,7 +227,7 @@ class PlayerActivity : AppCompatActivity() {
         // Retry replays the same source.
         findViewById<View>(R.id.player_retry).setOnClickListener {
             if (lastUrl.isNotBlank()) {
-                svc?.play(lastUrl, lastTitle.ifBlank { "MYTV" })
+                if (vlc != null) vlc?.play(lastUrl) else svc?.play(lastUrl, lastTitle.ifBlank { "MYTV" })
             }
         }
 
@@ -267,10 +284,72 @@ class PlayerActivity : AppCompatActivity() {
         if (isFinishing && !keep) runCatching { svc?.stop() }
         // Recording follows the player: leaving the player finalises the .ts file.
         if (isFinishing && LiveRecorder.isRecording()) LiveRecorder.stop()
+        runCatching { vlc?.release() }
+        vlc = null
         recBtn?.removeCallbacks(recTicker)
         runCatching { unbindService(connection) }
         super.onDestroy()
     }
+
+
+    /**
+     * libVLC path: a SurfaceView under the existing chrome, plus one play/pause button in the
+     * top bar (media3's controller can't drive VLC, so the transport control is ours).
+     */
+    private fun startVlcEngine() {
+        val root = findViewById<FrameLayout>(R.id.player_root) ?: return
+        if (lastUrl.isBlank()) return
+
+        val surfaceView = SurfaceView(this).apply {
+            keepScreenOn = true
+            setBackgroundColor(Color.BLACK)
+        }
+        root.addView(surfaceView, 0, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+
+        // Smaller than the video it overlays: put the new view directly above player_view.
+        (surfaceView.layoutParams as FrameLayout.LayoutParams)
+
+        val engine = VlcEngine(this)
+        engine.onState = { state -> runOnUiThread { renderVlc(state) } }
+        engine.attach(surfaceView)
+        engine.play(lastUrl)
+
+        vlc = engine
+        vlcSurface = surfaceView
+
+        // Transport button in the top bar, before the aspect control.
+        val bar = findViewById<View>(R.id.player_top_bar) as? android.view.ViewGroup
+        playPauseBtn = TextView(this).apply {
+            text = "\u23F8"
+            textSize = 16f
+            setTextColor(Color.parseColor("#F3F5FF"))
+            setBackgroundColor(Color.parseColor("#1D1D26"))
+            setPadding(dp(12), dp(7), dp(12), dp(7))
+            setOnClickListener {
+                vlc?.toggle()
+                renderVlc(null)
+            }
+        }
+        bar?.addView(playPauseBtn, android.widget.LinearLayout.LayoutParams(
+            android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+            android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { marginStart = dp(10) })
+    }
+
+    /** Keep the VLC transport glyph honest; [state] null means "re-read the engine". */
+    private fun renderVlc(state: VlcEngine.State?) {
+        val btn = playPauseBtn ?: return
+        val playing = when (state) {
+            VlcEngine.State.PLAYING -> true
+            VlcEngine.State.PAUSED -> false
+            null -> vlc?.isPlaying() == true
+            else -> return
+        }
+        btn.text = if (playing) "\u23F8" else "\u25B6"
+    }
+
+    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
     /** REC button label: idle glyph, or elapsed time in red while recording. */
     private fun renderRec() {
