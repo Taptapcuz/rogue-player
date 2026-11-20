@@ -32,6 +32,7 @@ class BrowseAdapter(
     private val compactPosters: Boolean = false,
     private val onEpisode: (Episode, String) -> Unit = { _, _ -> },
     private val onChannelLong: (Channel) -> Unit = {},
+    private val pillCards: Boolean = false,
 ) : ListAdapter<BrowseItem, RecyclerView.ViewHolder>(DIFF) {
 
     /** Favourited channel ids — starred rows and long-press handled by the host. */
@@ -105,6 +106,7 @@ class BrowseAdapter(
 
     @SuppressLint("SetTextI18n")
     private fun renderChannelCard(v: View, ch: Channel) {
+        if (pillCards) { renderChannelPill(v, ch); return }
         val card = v as FrameLayout
         card.removeAllViews()
         card.setBackground(rounded(card, Palette.CARD, 12))
@@ -192,6 +194,130 @@ class BrowseAdapter(
         card.setOnClickListener { onChannel(ch) }
         card.setOnLongClickListener { onChannelLong(ch); true }
     }
+
+    /** Pill-capsule variant of [renderChannelCard]: the SAME channel data,
+     *  schedule, progress and favourites star — only the container is a capsule
+     *  (fully-rounded, circular logo, pill-shaped progress fill) instead of a
+     *  rounded rectangle. Interactions are identical: tap plays, long-press
+     *  favourites. The pill rows are a bit taller so the guide reads inside. */
+    @SuppressLint("SetTextI18n")
+    private fun renderChannelPill(v: View, ch: Channel) {
+        val card = v as FrameLayout
+        card.removeAllViews()
+        // The WHOLE capsule is the progress body: card-colour underlay, and the
+        // accent fills the pill from the left edge toward the right as the
+        // programme plays. Clipped to the rounded shape so it never bleeds out.
+        val now = nowPlaying[ch.id]
+        val fraction = (if (now != null) progressOf(now).coerceIn(0f, 1f) else 0f)
+        card.setBackground(PillFillDrawable(Palette.CARD, accent, fraction, 36f * density(card)))
+
+        val col = LinearLayout(card.context).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(card, 8), dp(card, 8), dp(card, 14), dp(card, 8))
+        }
+        card.addView(col, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+
+        val row = LinearLayout(card.context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        row.addView(logoTile(col, initialsOf(ch.name), hueFor(ch), 48, circular = true))
+
+        val next = nextPlaying[ch.id]
+        val right = LinearLayout(card.context).apply { orientation = LinearLayout.VERTICAL }
+        // name + programme line: strong + readable on both the dark underlay and
+        // the accent fill (region prefix caps the channel title, as before)
+        val nameTxt = ch.name
+        right.addView(TextView(card.context).apply {
+            text = nameTxt
+            textSize = 14.5f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Palette.TEXT)
+            maxLines = 1
+        })
+        right.addView(TextView(card.context).apply {
+            text = ch.group.replace("_", " ")
+            textSize = 10.5f
+            setTextColor(Palette.MUTED)
+            maxLines = 1
+        })
+        val progTxt = when {
+            now != null && next != null ->
+                "${time(now.start)} - ${time(now.end)} · ${now.title}"
+            now != null -> "${time(now.start)} - ${time(now.end)}"
+            else -> ch.group.replace("_", " ")
+        }
+        right.addView(TextView(card.context).apply {
+            text = progTxt
+            textSize = 11.5f
+            setTextColor(Palette.TEXT)
+            maxLines = 1
+        })
+        row.addView(right, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            .apply { setMargins(dp(card, 12), 0, dp(card, 6), 0) })
+        col.addView(row, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+
+        // favourite star (top-right), same as lock card
+        if (ch.id in favoriteIds) {
+            card.addView(TextView(card.context).apply {
+                text = "★"
+                textSize = 13f
+                setTextColor(accent)
+            }, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                gravity = Gravity.TOP or Gravity.END
+                setMargins(0, dp(card, 4), dp(card, 12), 0)
+            })
+        }
+
+        card.setOnClickListener { onChannel(ch) }
+        card.setOnLongClickListener { onChannelLong(ch); true }
+    }
+
+    /** Draws a rounded capsule and fills it with [fill] from the left by [fraction]
+     *  over a [base] underlay, both clipped to the pill shape. When [fraction] is
+     *  1.0 the whole pill is [fill]; at 0 it is [base]. */
+    private class PillFillDrawable(
+        private val base: Int,
+        private val fill: Int,
+        private val fraction: Float,
+        private val radiusPx: Float,
+    ) : android.graphics.drawable.Drawable() {
+        private val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+        private val r = android.graphics.RectF()
+
+        override fun draw(canvas: android.graphics.Canvas) {
+            val f = fraction.coerceIn(0f, 1f)
+            r.set(bounds)
+            // 1) base underlay, full capsule
+            paint.color = base
+            canvas.drawRoundRect(r, radiusPx, radiusPx, paint)
+            if (f <= 0f) return
+            // 2) accent fill grown from the left, clipped to the capsule
+            val w = bounds.width().toFloat()
+            val h = bounds.height().toFloat()
+            canvas.save()
+            canvas.clipPath(capsulePath())
+            canvas.drawRect(0f, 0f, w * f, h, paint.apply { color = fill })
+            canvas.restore()
+        }
+        private fun capsulePath(): android.graphics.Path {
+            val rect = android.graphics.RectF(bounds)
+            return android.graphics.Path().apply {
+                setFillType(android.graphics.Path.FillType.EVEN_ODD)
+                addRoundRect(rect, radiusPx, radiusPx, android.graphics.Path.Direction.CW)
+            }
+        }
+        override fun setAlpha(a: Int) {}
+        override fun setColorFilter(cf: android.graphics.ColorFilter?) {}
+        override fun getOpacity(): Int = android.graphics.PixelFormat.TRANSLUCENT
+    }
+
+    private fun density(v: View): Float = v.resources.displayMetrics.density
 
     /** What fraction of [p] has elapsed right now (0..1). */
     private fun progressOf(p: EpgProgram): Float =
@@ -295,7 +421,8 @@ class BrowseAdapter(
         return when (viewType) {
             TYPE_CHANNEL -> FrameLayout(parent.context).apply {
                 layoutParams = RecyclerView.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, dp(parent, 74))
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    dp(parent, if (pillCards) 92 else 74))
             }
             TYPE_POSTER_TILE, TYPE_POSTER_ROW ->
                 PosterCell(parent.context, compact = viewType == TYPE_POSTER_ROW).apply {
@@ -323,13 +450,13 @@ class BrowseAdapter(
         }
     }
 
-    private fun logoTile(parent: View, initials: String, color: Int, size: Int): View {
+    private fun logoTile(parent: View, initials: String, color: Int, size: Int, circular: Boolean = false): View {
         val tile = TextView(parent.context).apply {
             text = initials
             textSize = size * 0.3f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
-            setBackground(rounded(parent, color, 8))
+            setBackground(rounded(parent, color, if (circular) size / 2 else 8))
         }
         tile.layoutParams = LinearLayout.LayoutParams(dp(parent, size), dp(parent, size))
         return tile

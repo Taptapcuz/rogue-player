@@ -392,11 +392,23 @@ class MainActivity : AppCompatActivity() {
         // Visible browser entry (long-press Home also opens it). YouTube has no playable
         // SDK for native apps, so m.youtube.com in a WebView is the only in-app route.
         // Hidden on the /Home landing (the YouTube tile owns that there).
+        // Basic edition: a red YouTube play-button; locked keeps the globe icon.
+        val ytStyle = resources.getBoolean(R.bool.rp_pill_cards)
         globeBtn = TextView(this).apply {
-            text = "🌐"
-            textSize = 15f
+            text = if (ytStyle) "▶" else "🌐"
+            textSize = if (ytStyle) 10.5f else 15f
             gravity = Gravity.CENTER
-            setTextColor(Palette.MUTED)
+            setTextColor(Color.WHITE)
+            if (ytStyle) {
+                // red rounded YouTube badge: red fill + white play triangle
+                background = GradientDrawable().apply {
+                    cornerRadius = 5 * resources.displayMetrics.density
+                    setColor(0xFFE60023.toInt())
+                }
+                setPadding(dp(5), dp(2), dp(5), dp(2))
+            } else {
+                setTextColor(Palette.MUTED)
+            }
             setOnClickListener { startActivity(BrowserActivity.intent(this@MainActivity)) }
         }
         h.addView(globeBtn, LinearLayout.LayoutParams(dp(32), dp(34)).apply { gravity = Gravity.CENTER_VERTICAL })
@@ -870,6 +882,7 @@ class MainActivity : AppCompatActivity() {
             onClickChannel, onClickEntry,
             onEpisode = onClickEpisode,
             onChannelLong = { ch -> toggleFavorite(ch) },
+            pillCards = resources.getBoolean(R.bool.rp_pill_cards),
         ).apply { favoriteIds = favorites.toSet() }
         val list = RecyclerView(this).apply {
             clipToPadding = false
@@ -1201,6 +1214,7 @@ class MainActivity : AppCompatActivity() {
             onChannel = { ch -> host.removeView(overlay); onClickChannel(ch) },
             onEntry = { e, isMovie -> host.removeView(overlay); onClickEntry(e, isMovie) },
             compactPosters = true,
+            pillCards = resources.getBoolean(R.bool.rp_pill_cards),
         )
         list.adapter = results
 

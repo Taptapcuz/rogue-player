@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Basic edition: collect pill capsules for live-TV cards (redesign look).
+         Value overrides the shared default (false) in src/main. -->
+    <bool name="rp_pill_cards">true</bool>
+</resources>

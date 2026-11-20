@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Cosmetic switch: whether live-TV channel cards render as pill capsules.
+         Default (shared / locked Rogue Player) = rounded rectangles. The basic
+         edition flips this to true for the redesign look. Same channel data,
+         schedule and progress — only the container shape differs. -->
+    <bool name="rp_pill_cards">false</bool>
+</resources>
