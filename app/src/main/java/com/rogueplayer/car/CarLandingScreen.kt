@@ -152,11 +152,22 @@ class CarLandingScreen(
     }
 
     private fun attach(surface: Surface, width: Int, height: Int, dpi: Int) {
-        detach()
         if (width <= 0 || height <= 0) {
             Log.w(TAG, "ignoring empty surface ${width}x$height")
             return
         }
+        // Re-attach after Back: the host hands the surface back on the SAME geometry. Keep
+        // the live page instead of tearing it down — detach() dismissed the Presentation and
+        // released the VirtualDisplay, which is the black flash + "reload" before the landing
+        // reappeared. Only a real size change needs a rebuild.
+        val live = presentation
+        if (live != null && width == viewW && height == viewH) {
+            Log.i(TAG, "re-attach same geometry ${width}x$height - keeping the page")
+            runCatching { if (!live.isShowing) live.show() }
+            if (!splashDone) showSplash()
+            return
+        }
+        detach()
         val dm = ctx.getSystemService(DisplayManager::class.java) ?: return
         display = dm.createVirtualDisplay(
             "mytv-landing",
@@ -187,6 +198,7 @@ class CarLandingScreen(
     /** Phase 1: the neon boot, full-screen. [splashDone] flips so a re-attach skips it. */
     private fun showSplash() {
         val frame = root ?: return
+        Log.i(TAG, "splash: playing boot animation")
         frame.removeAllViews()
         // Full-bleed on the car surface: flames/orbs cover the whole screen, and
         // SplashView now sizes the wordmark to fit BOTH width and height (no clipping).
