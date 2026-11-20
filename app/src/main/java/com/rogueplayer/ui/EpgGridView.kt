@@ -121,21 +121,14 @@ class EpgGridView @JvmOverloads constructor(
     private fun startFling(velocityX: Float, velocityY: Float) {
         scroller.forceFinished(true)
         // Respect the drag's axis lock: a vertical flick shouldn't slide the timeline.
-        val vx = if (lockAxis == 2) 0f else velocityX * 1.35f
+        val vx = if (lockAxis == 2) 0f else velocityX * 1.25f
         val vy = if (lockAxis == 1) 0f else velocityY
-        val vertical = kotlin.math.abs(vy) > kotlin.math.abs(vx)
-        // Keep a flick worth the same number of *rows* whatever height the grid gets:
-        // the portrait preview eats vertical space, so a fixed multiplier crossed far
-        // more channels per flick than the list did in its taller layout.
-        val visibleRows = ((height - rulerHeight) / rowHeight).coerceAtLeast(1f)
-        val vScale = if (vertical && rows.size > 80) {
-            (2.6f * (visibleRows / 8f)).coerceIn(1.2f, 2.8f)
-        } else {
-            1.35f
-        }
+        // 1:1 momentum and a velocity cap. The old 2.6x vertical boost overshot
+        // badly — the list jumped well past where the finger flicked.
+        val vyCapped = (vy * 0.8f).coerceIn(-MAX_FLING_V, MAX_FLING_V)
         scroller.fling(
             scrollX.toInt(), scrollY.toInt(),
-            vx.toInt(), (vy * vScale).toInt(),
+            vx.toInt(), vyCapped.toInt(),
             0, maxScrollX(), 0, maxScrollY(),
         )
         postOnAnimation(flingRunner)
@@ -709,5 +702,8 @@ class EpgGridView @JvmOverloads constructor(
     private companion object {
         /** Leading region/country token providers put in front of channel names. */
         val REGION_PREFIX = Regex("^\\s*[A-Za-z0-9]{2,4}\\s*[|•:\\-]\\s*")
+
+        /** Cap on vertical fling velocity (px/s) so a hard flick can't overshoot. */
+        const val MAX_FLING_V = 3400f
     }
 }
