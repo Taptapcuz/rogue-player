@@ -73,7 +73,12 @@ class CarLandingScreen(
     private var display: VirtualDisplay? = null
     private var presentation: android.app.Presentation? = null
     private var root: FrameLayout? = null
-    private var splashDone = false
+    /** Per-PROCESS, not per-instance: the host recreates this screen on every back
+     *  navigation, and a per-instance flag replayed the boot animation each time — which
+     *  read as the app restarting. */
+    private val splashDone: Boolean
+        get() = splashShown
+
     private var viewW = 0
     private var viewH = 0
 
@@ -188,7 +193,7 @@ class CarLandingScreen(
         val sv = SplashView(frame.context)
         frame.addView(sv, FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        sv.start { handler.post { splashDone = true; showLanding() } }
+        sv.start { handler.post { splashShown = true; showLanding() } }
     }
 
     /** Phase 2: the landing page — city + scrim + tagline + 3×2 grid + web pill. */
@@ -251,6 +256,7 @@ class CarLandingScreen(
     }
 
     private fun dp(v: Int): Int = (v * ctx.resources.displayMetrics.density).toInt()
+
 
     // ------------------------------------------------------- template ---
     // A NavigationTemplate (with live routing) is what keeps AA handing us the
@@ -423,6 +429,10 @@ class CarLandingScreen(
         }
 
     private companion object {
+        /** Boot animation shows once per app process, however often the screen is rebuilt. */
+        @Volatile
+        private var splashShown = false
+
         const val TAG = "CarLanding"
     }
 }

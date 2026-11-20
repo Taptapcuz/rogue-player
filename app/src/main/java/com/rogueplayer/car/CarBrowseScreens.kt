@@ -478,6 +478,7 @@ class CarEpisodesScreen(
     private val openPlayer: (host: Screen, title: String) -> Unit,
     private val series: Entry,
     private val episodes: List<Episode>,
+    private val seasonIndex: Int = 0,
 ) : Screen(ctx) {
 
     /** Season number -> its episodes, oldest season first, episodes in order. */
@@ -485,19 +486,16 @@ class CarEpisodesScreen(
         episodes.groupBy { it.season }.toSortedMap()
             .map { (season, eps) -> season to eps.sortedBy { it.number } }
 
-    private var activeTab = 0
+    private fun currentSeason(): Pair<Int, List<Episode>> =
+        seasons.getOrNull(seasonIndex.coerceIn(0, (seasons.size - 1).coerceAtLeast(0)))
+            ?: (1 to emptyList())
 
-    // The host reports the tab's CONTENT ID ("season-3"), not an index.
-    private val tabCallback = object : androidx.car.app.model.TabTemplate.TabCallback {
-        override fun onTabSelected(tabId: String) {
-            val next = seasons.indexOfFirst { "season-" + it.first == tabId }
-            if (next >= 0 && next != activeTab) {
-                activeTab = next
-                invalidate()
-            }
-        }
-    }
-
+    /**
+     * Seasons live in the action strip rather than a TabTemplate: tabs cap at 4, need icons,
+     * demand >= 2 of them, replace the back chevron with an APP_ICON header — and a show
+     * with more than four seasons crashed the whole screen. A strip keeps BACK and still
+     * puts the seasons on the bar.
+     */
     override fun onGetTemplate(): Template {
         if (seasons.isEmpty()) {
             return ListTemplate.Builder()
@@ -510,31 +508,35 @@ class CarEpisodesScreen(
                         .build())
                 .build()
         }
-        // TabTemplate is Car API 6; an older host keeps the grouped scrolling list.
-        if (!runCatching { ctx.carAppApiLevel >= 6 }.getOrDefault(false)) return groupedTemplate()
 
-        val (season, eps) = seasons[activeTab.coerceIn(0, seasons.size - 1)]
-        val content = ListTemplate.Builder()
-            .setTitle(series.name)
-            .setSingleList(episodeList(eps))
-            .build()
+        val (season, eps) = currentSeason()
 
-        val builder = androidx.car.app.model.TabTemplate.Builder(tabCallback)
-            .setHeaderAction(Action.BACK)
-        seasons.forEach { (num, _) ->
-            builder.addTab(
-                androidx.car.app.model.Tab.Builder()
-                    .setTitle("Season $num")
-                    .setContentId("season-$num")
+        val strip = androidx.car.app.model.ActionStrip.Builder()
+        val shown = seasons.take(MAX_SEASON_ACTIONS)
+        shown.forEachIndexed { index, (num, _) ->
+            strip.addAction(
+                Action.Builder()
+                    .setIcon(seasonIcon(num))
+                    .setOnClickListener {
+                        if (index != seasonIndex) {
+                            screenManager.push(
+                                CarEpisodesScreen(ctx, play, openPlayer, series, episodes, index)
+                            )
+                        }
+                    }
                     .build())
         }
-        return builder
-            .setActiveTabContentId("season-$season")
-            .setTabContents(androidx.car.app.model.TabContents.Builder(content).build())
-            .build()
-    }
+        if (seasons.size > MAX_SEASON_ACTIONS) {
+            strip.addAction(
+                Action.Builder()
+                    .setIcon(seasonIcon(0))
+                    .setOnClickListener {
+                        screenManager.push(
+                            CarSeasonPickerScreen(ctx, series, seasons, episodes, play, openPlayer))
+                    }
+                    .build())
+        }
 
-    private fun episodeList(eps: List<Episode>): ItemList {
         val list = ItemList.Builder()
         eps.take(200).forEach { ep ->
             list.addItem(
@@ -543,27 +545,11 @@ class CarEpisodesScreen(
                     .setOnClickListener { start(ep) }
                     .build())
         }
-        return list.build()
-    }
 
-    /** Fallback for hosts without TabTemplate: seasons as headers in one scrolling list. */
-    private fun groupedTemplate(): Template {
-        val list = ItemList.Builder()
-        seasons.forEach { (season, eps) ->
-            list.addItem(Row.Builder()
-                .setTitle("Season $season")
-                .addText("${eps.size} episodes")
-                .build())
-            eps.take(200).forEach { ep ->
-                list.addItem(Row.Builder()
-                    .setTitle(ep.displayTitle())
-                    .setOnClickListener { start(ep) }
-                    .build())
-            }
-        }
         return ListTemplate.Builder()
-            .setTitle(series.name)
+            .setTitle("${series.name} — Season $season")
             .setHeaderAction(Action.BACK)
+            .setActionStrip(strip.build())
             .setSingleList(list.build())
             .build()
     }
@@ -572,6 +558,37 @@ class CarEpisodesScreen(
         if (ep.url.isBlank()) return
         play(ep.url, "${series.name} — ${ep.displayTitle()}")
         openPlayer(this, "${series.name} — ${ep.displayTitle()}")
+    }
+}
+
+/** Every season of a show, for series with more seasons than the action strip can hold. */
+class CarSeasonPickerScreen(
+    private val ctx: CarContext,
+    private val series: Entry,
+    private val seasons: List<Pair<Int, List<Episode>>>,
+    private val allEpisodes: List<Episode>,
+    private val play: (url: String, title: String) -> Unit,
+    private val openPlayer: (host: Screen, title: String) -> Unit,
+) : Screen(ctx) {
+
+    override fun onGetTemplate(): Template {
+        val list = ItemList.Builder()
+        seasons.forEachIndexed { index, (season, eps) ->
+            list.addItem(
+                Row.Builder()
+                    .setTitle("Season $season")
+                    .addText("${eps.size} episodes")
+                    .setOnClickListener {
+                        screenManager.push(
+                            CarEpisodesScreen(ctx, play, openPlayer, series, allEpisodes, index))
+                    }
+                    .build())
+        }
+        return ListTemplate.Builder()
+            .setTitle(series.name)
+            .setHeaderAction(Action.BACK)
+            .setSingleList(list.build())
+            .build()
     }
 }
 
@@ -751,6 +768,25 @@ private fun sortKey(name: String): String {
     }
     return t
 }
+
+/** Tab icon for a season: its number, drawn on a tinted tile. */
+private fun seasonIcon(number: Int): CarIcon {
+    val size = 96
+    val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+    val c = android.graphics.Canvas(bmp)
+    val p = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.WHITE
+        textSize = if (number > 99) 44f else 64f
+        textAlign = android.graphics.Paint.Align.CENTER
+        isFakeBoldText = true
+    }
+    val y = size / 2f - (p.descent() + p.ascent()) / 2f
+    c.drawText(if (number == 0) "\u22EF" else number.toString(), size / 2f, y, p)
+    return CarIcon.Builder(IconCompat.createWithBitmap(bmp)).build()
+}
+
+/** Car action strips hold a handful of actions; beyond this, seasons move to a picker. */
+private const val MAX_SEASON_ACTIONS = 3
 
 /** Posters per car page; the host draws one page at a time. */
 private const val PAGE_SIZE = 24

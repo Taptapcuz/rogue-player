@@ -12,6 +12,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.hls.HlsMediaSource
@@ -398,13 +399,26 @@ class PlaybackService : Service() {
      * providers that omit the right content-type); everything else uses Media3's
      * default auto-detect (MP4/TS/AAC/m3u8 when not forced).
      */
+    /** Shared OkHttp client for stream IO (redirects + connection reuse). */
+    private val streamClient: okhttp3.OkHttpClient by lazy {
+        okhttp3.OkHttpClient.Builder()
+            .followRedirects(true)
+            .followSslRedirects(true)
+            .connectTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+    }
+
     private fun buildMediaSource(url: String): MediaSource {
         val item = MediaItem.fromUri(Uri.parse(url))
         val isHls = url.contains(".m3u8", ignoreCase = true)
-        val httpFactory = DefaultHttpDataSource.Factory()
+        // VOD on this provider 302s every request to another host (a plain IP), and Media3's
+        // DefaultHttpDataSource (HttpURLConnection) surfaced that as
+        // "SocketException: Connection reset" on open — so nothing in Movies/TV Shows would
+        // play. OkHttp handles the redirect hop and reuses connections properly.
+        val httpFactory = OkHttpDataSource.Factory(streamClient)
             .setUserAgent(com.rogueplayer.data.HttpAgent.UA)
             .setDefaultRequestProperties(com.rogueplayer.data.HttpAgent.STREAM_HEADERS)
-            .setAllowCrossProtocolRedirects(true)
         return if (isHls && com.rogueplayer.ui.UiSettings.forceHls(this)) {
             HlsMediaSource.Factory(httpFactory)
                 .setAllowChunklessPreparation(true)
