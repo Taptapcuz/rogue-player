@@ -8,6 +8,8 @@ import android.os.Bundle
 import android.util.Log
 import android.view.Gravity
 import android.view.LayoutInflater
+import android.view.MotionEvent
+import android.view.ViewGroup
 import android.view.View
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -17,6 +19,7 @@ import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.GridLayoutManager
+import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.rogueplayer.MyApplication
@@ -1362,7 +1365,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(dp(12), dp(10), dp(12), dp(4))
         }
         head.addView(TextView(this).apply {
-            text = "←  Playlists"
+            text = "\u2190  Playlists"
             textSize = 12.5f
             setTypeface(null, android.graphics.Typeface.BOLD)
             setTextColor(Palette.TEXT)
@@ -1394,7 +1397,7 @@ class MainActivity : AppCompatActivity() {
         col.addView(head)
 
         col.addView(TextView(this).apply {
-            text = "Categories · ${pl.name}"
+            text = "Categories \u00b7 ${pl.name}"
             textSize = 14f
             setTypeface(null, android.graphics.Typeface.BOLD)
             setTextColor(Palette.TEXT)
@@ -1402,10 +1405,10 @@ class MainActivity : AppCompatActivity() {
         })
         col.addView(TextView(this).apply {
             text = if (hidden.isEmpty()) {
-                "Tap a category to hide it. ${repo.categories(pl).size} categories, " +
-                    "${pl.channels.size} channels."
+                "Tap a category to hide it. Long-press to drag the order. " +
+                    "${repo.categories(pl).size} categories, ${pl.channels.size} channels."
             } else {
-                "${hidden.size} hidden · ${repo.categories(pl).size} categories, " +
+                "${hidden.size} hidden \u00b7 ${repo.categories(pl).size} categories, " +
                     "${pl.channels.size} channels."
             }
             textSize = 11.5f
@@ -1413,47 +1416,100 @@ class MainActivity : AppCompatActivity() {
             setPadding(dp(14), 0, dp(14), dp(8))
         })
 
-        val scroll = android.widget.ScrollView(this).apply { isFillViewport = true }
-        val stack = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(12), 0, dp(12), dp(96))
-        }
-        scroll.addView(stack, android.widget.FrameLayout.LayoutParams(
-            android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
-            android.widget.FrameLayout.LayoutParams.WRAP_CONTENT))
-        col.addView(scroll, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
-
         val categories = repo.categories(pl)
         if (categories.isEmpty()) {
-            stack.addView(TextView(this).apply {
-                text = "This playlist has no categories yet — Update it first."
+            col.addView(TextView(this).apply {
+                text = "This playlist has no categories yet \u2014 Update it first."
                 setTextColor(Palette.MUTED)
                 textSize = 13f
                 gravity = Gravity.CENTER
                 setPadding(dp(18), dp(40), dp(18), dp(40))
-            })
+            }, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
             return
         }
 
-        val orderedGroups = categories.map { it.first }
-        categories.forEachIndexed { index, pair ->
-            val (group, count) = pair
-            val isHidden = group in hidden
-            val row = LinearLayout(this).apply {
+        // Rows live in a RecyclerView so ItemTouchHelper can lift one and slide it 1:1
+        // under the finger: long-press anywhere on a row, or touch the \u2807 grip for an
+        // immediate lift. Tap still toggles shown/hidden, and the \u25b2\u25bc arrows stay as a
+        // one-handed fallback. The order is written to prefs on drop, not per move.
+        val rv = RecyclerView(this).apply {
+            layoutManager = LinearLayoutManager(this@MainActivity)
+            itemAnimator = null              // rows must never animate: drag has to stay 1:1
+            overScrollMode = View.OVER_SCROLL_NEVER
+            clipToPadding = false
+            setPadding(dp(12), 0, dp(12), dp(96))
+        }
+        val catAdapter = CategoryOrderAdapter(pl, categories.toMutableList(), hidden)
+        rv.adapter = catAdapter
+        val touch = ItemTouchHelper(catAdapter.dragCallback())
+        touch.attachToRecyclerView(rv)
+        catAdapter.touchHelper = touch
+        col.addView(rv, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+    }
+
+    /**
+     * Drag-reorderable category list for the Categories screen.
+     *
+     * Order is persisted on DROP (ItemTouchHelper.clearView), not on every move:
+     * writing prefs mid-drag bumps groupsVersion and any listener would fight the
+     * finger. Tap = hide/show, long-press = lift, grip = lift immediately.
+     */
+    private inner class CategoryOrderAdapter(
+        private val pl: Playlist,
+        val items: MutableList<Pair<String, Int>>,
+        private val hidden: Set<String>
+    ) : RecyclerView.Adapter<CategoryOrderAdapter.Holder>() {
+
+        var touchHelper: ItemTouchHelper? = null
+        private var orderDirty = false
+
+        inner class Holder(val row: LinearLayout) : RecyclerView.ViewHolder(row)
+
+        override fun getItemCount(): Int = items.size
+
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder =
+            Holder(LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(12), dp(11), dp(12), dp(11))
+                setPadding(dp(8), dp(11), dp(12), dp(11))
                 setBackground(rounded(Palette.CARD, 10))
+                // RecyclerView defaults to WRAP_CONTENT: without this the cards shrink
+                // to their text and stack flush against each other.
+                layoutParams = RecyclerView.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = dp(6) }
+            })
+
+        override fun onBindViewHolder(holder: Holder, position: Int) {
+            val row = holder.row
+            row.removeAllViews()
+
+            val (group, count) = items[position]
+            val isHidden = group in hidden
+
+            // Immediate-lift grip. Returning false keeps the touch stream alive so
+            // ItemTouchHelper owns the drag from the first pixel of movement.
+            row.addView(TextView(this@MainActivity).apply {
+                text = "\u2807"
+                textSize = 17f
+                gravity = Gravity.CENTER
+                setTextColor(Palette.MUTED)
+                setPadding(dp(4), dp(2), dp(10), dp(2))
                 isClickable = true
-                setOnClickListener {
-                    repo.setGroupHidden(pl.name, group, !isHidden)
-                    toast((if (isHidden) "Shown: " else "Hidden: ") + group.replace("_", " ").trim())
-                    renderContent()
+                setOnTouchListener { v, e ->
+                    if (e.actionMasked == MotionEvent.ACTION_DOWN) {
+                        touchHelper?.startDrag(holder)
+                        v.parent?.requestDisallowInterceptTouchEvent(true)
+                    }
+                    false
                 }
-            }
-            val textCol = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-            textCol.addView(TextView(this).apply {
+            })
+
+            val textCol = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
+            textCol.addView(TextView(this@MainActivity).apply {
                 // Raw provider group, NOT Titles.clean(): that strips the "US | " / "CA | "
                 // prefixes, which makes "Entertainment" and "CA | Entertainment" look like
                 // the same category in this list.
@@ -1464,21 +1520,17 @@ class MainActivity : AppCompatActivity() {
                 maxLines = 1
                 ellipsize = android.text.TextUtils.TruncateAt.END
             })
-            textCol.addView(TextView(this).apply {
+            textCol.addView(TextView(this@MainActivity).apply {
                 text = "${Titles.count(count)} channels"
                 textSize = 11f
                 setTextColor(Palette.MUTED)
             })
             row.addView(textCol, LinearLayout.LayoutParams(
                 0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            // Reorder arrows: move this category up/down in the saved order.
-            row.addView(reorderArrow("▲", enabled = index > 0) {
-                moveCategory(pl, orderedGroups, index, -1)
-            })
-            row.addView(reorderArrow("▼", enabled = index < orderedGroups.size - 1) {
-                moveCategory(pl, orderedGroups, index, +1)
-            })
-            row.addView(TextView(this).apply {
+
+            row.addView(reorderArrow("\u25b2", enabled = position > 0) { moveBy(holder, -1) })
+            row.addView(reorderArrow("\u25bc", enabled = position < items.size - 1) { moveBy(holder, +1) })
+            row.addView(TextView(this@MainActivity).apply {
                 text = if (isHidden) "HIDDEN" else "SHOWN"
                 textSize = 9.5f
                 setTypeface(null, android.graphics.Typeface.BOLD)
@@ -1486,11 +1538,60 @@ class MainActivity : AppCompatActivity() {
                 setBackground(rounded(if (isHidden) Palette.CARD_HI else Palette.ACCENTS[0], 8))
                 setPadding(dp(8), dp(3), dp(8), dp(3))
             })
-            stack.addView(row, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                bottomMargin = dp(6)
-            })
+
+            row.setOnClickListener {
+                app.repository.setGroupHidden(pl.name, group, !isHidden)
+                toast((if (isHidden) "Shown: " else "Hidden: ") + group.replace("_", " ").trim())
+                renderContent()
+            }
         }
+
+        /** Arrow move: shift one row by [delta] without rebuilding the screen. */
+        private fun moveBy(holder: Holder, delta: Int) {
+            val from = holder.bindingAdapterPosition
+            if (from == RecyclerView.NO_POSITION) return
+            val to = from + delta
+            if (to < 0 || to >= items.size) return
+            items.add(to, items.removeAt(from))
+            notifyItemMoved(from, to)
+            persistOrder()
+        }
+
+        private fun persistOrder() {
+            app.repository.setGroupOrder(pl.name, items.map { it.first })
+        }
+
+        fun dragCallback(): ItemTouchHelper.SimpleCallback =
+            object : ItemTouchHelper.SimpleCallback(
+                ItemTouchHelper.UP or ItemTouchHelper.DOWN, 0
+            ) {
+                override fun onMove(
+                    rv: RecyclerView,
+                    vh: RecyclerView.ViewHolder,
+                    target: RecyclerView.ViewHolder
+                ): Boolean {
+                    val from = vh.bindingAdapterPosition
+                    val to = target.bindingAdapterPosition
+                    if (from == RecyclerView.NO_POSITION || to == RecyclerView.NO_POSITION) return false
+                    items.add(to, items.removeAt(from))
+                    notifyItemMoved(from, to)
+                    orderDirty = true
+                    return true
+                }
+
+                override fun onSwiped(vh: RecyclerView.ViewHolder, direction: Int) = Unit
+
+                override fun isLongPressDragEnabled(): Boolean = true
+
+                override fun clearView(rv: RecyclerView, vh: RecyclerView.ViewHolder) {
+                    super.clearView(rv, vh)
+                    if (orderDirty) {
+                        orderDirty = false
+                        persistOrder()
+                        toast("Category order saved")
+                    }
+                }
+            }
     }
 
     /** Small tappable up/down arrow for reordering a category row. */
@@ -1506,17 +1607,6 @@ class MainActivity : AppCompatActivity() {
             isEnabled = enabled
             setOnClickListener { if (enabled) onClick() }
         }
-
-    /** Move the category at [index] by [delta] in the saved order, then persist. */
-    private fun moveCategory(pl: Playlist, currentOrder: List<String>, index: Int, delta: Int) {
-        val to = index + delta
-        if (to < 0 || to >= currentOrder.size) return
-        val list = currentOrder.toMutableList()
-        val moved = list.removeAt(index)
-        list.add(to, moved)
-        app.repository.setGroupOrder(pl.name, list)
-        renderContent()   // rebuild the Categories screen in the new order
-    }
 
     /**
      * The Playlists screen: one card per saved source with Update / Edit / Categories /
