@@ -480,25 +480,85 @@ class CarEpisodesScreen(
     private val episodes: List<Episode>,
 ) : Screen(ctx) {
 
+    /** Season number -> its episodes, oldest season first, episodes in order. */
+    private val seasons: List<Pair<Int, List<Episode>>> =
+        episodes.groupBy { it.season }.toSortedMap()
+            .map { (season, eps) -> season to eps.sortedBy { it.number } }
+
+    private var activeTab = 0
+
+    // The host reports the tab's CONTENT ID ("season-3"), not an index.
+    private val tabCallback = object : androidx.car.app.model.TabTemplate.TabCallback {
+        override fun onTabSelected(tabId: String) {
+            val next = seasons.indexOfFirst { "season-" + it.first == tabId }
+            if (next >= 0 && next != activeTab) {
+                activeTab = next
+                invalidate()
+            }
+        }
+    }
+
     override fun onGetTemplate(): Template {
-        val list = ItemList.Builder()
-        if (episodes.isEmpty()) {
-            list.addItem(Row.Builder().setTitle("No episodes")
-                .addText("This provider returned no episode list.").build())
-        } else {
-            val bySeason = episodes.groupBy { it.season }.toSortedMap()
-            bySeason.forEach { (season, eps) ->
-                // One header row per season, then each episode.
-                list.addItem(Row.Builder()
-                    .setTitle("Season $season")
-                    .addText("${eps.size} episodes")
-                    .build())
-                eps.take(200).forEach { ep ->
-                    list.addItem(Row.Builder()
-                        .setTitle(ep.displayTitle())
-                        .setOnClickListener { start(ep) }
+        if (seasons.isEmpty()) {
+            return ListTemplate.Builder()
+                .setTitle(series.name)
+                .setHeaderAction(Action.BACK)
+                .setSingleList(
+                    ItemList.Builder()
+                        .addItem(Row.Builder().setTitle("No episodes")
+                            .addText("This provider returned no episode list.").build())
                         .build())
-                }
+                .build()
+        }
+        // TabTemplate is Car API 6; an older host keeps the grouped scrolling list.
+        if (!runCatching { ctx.carAppApiLevel >= 6 }.getOrDefault(false)) return groupedTemplate()
+
+        val (season, eps) = seasons[activeTab.coerceIn(0, seasons.size - 1)]
+        val content = ListTemplate.Builder()
+            .setTitle(series.name)
+            .setSingleList(episodeList(eps))
+            .build()
+
+        val builder = androidx.car.app.model.TabTemplate.Builder(tabCallback)
+            .setHeaderAction(Action.BACK)
+        seasons.forEach { (num, _) ->
+            builder.addTab(
+                androidx.car.app.model.Tab.Builder()
+                    .setTitle("Season $num")
+                    .setContentId("season-$num")
+                    .build())
+        }
+        return builder
+            .setActiveTabContentId("season-$season")
+            .setTabContents(androidx.car.app.model.TabContents.Builder(content).build())
+            .build()
+    }
+
+    private fun episodeList(eps: List<Episode>): ItemList {
+        val list = ItemList.Builder()
+        eps.take(200).forEach { ep ->
+            list.addItem(
+                Row.Builder()
+                    .setTitle(ep.displayTitle())
+                    .setOnClickListener { start(ep) }
+                    .build())
+        }
+        return list.build()
+    }
+
+    /** Fallback for hosts without TabTemplate: seasons as headers in one scrolling list. */
+    private fun groupedTemplate(): Template {
+        val list = ItemList.Builder()
+        seasons.forEach { (season, eps) ->
+            list.addItem(Row.Builder()
+                .setTitle("Season $season")
+                .addText("${eps.size} episodes")
+                .build())
+            eps.take(200).forEach { ep ->
+                list.addItem(Row.Builder()
+                    .setTitle(ep.displayTitle())
+                    .setOnClickListener { start(ep) }
+                    .build())
             }
         }
         return ListTemplate.Builder()
