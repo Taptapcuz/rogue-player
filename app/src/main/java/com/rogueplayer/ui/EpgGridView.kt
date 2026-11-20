@@ -159,7 +159,7 @@ class EpgGridView @JvmOverloads constructor(
         color = Palette.TEXT; textSize = dp(12.5f)
     }
     private val subPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Palette.DIM; textSize = dp(10f)
+        color = Palette.TEXT; textSize = dp(10.5f)
     }
     private val chanPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Palette.TEXT; textSize = dp(12f)
@@ -168,7 +168,7 @@ class EpgGridView @JvmOverloads constructor(
         color = Palette.MUTED; textSize = dp(9.5f)
     }
     private val rulerPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Palette.MUTED; textSize = dp(11f)
+        color = Palette.TEXT; textSize = dp(12f)
     }
     private val tilePaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val starPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {

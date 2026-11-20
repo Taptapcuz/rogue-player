@@ -245,30 +245,18 @@ class BrowseAdapter(
             now != null -> "${time(now.start)} - ${time(now.end)}"
             else -> ch.group.replace("_", " ")
         }
-        // Guide line with a thin accent progress bar drawn OVER the text (across
-        // its lower edge), so the fill rides on top of the guide info.
-        val guideHost = FrameLayout(card.context)
-        guideHost.addView(TextView(card.context).apply {
+        // Karaoke-style fill via a custom view: base text is always drawn white,
+        // then the SAME text is drawn in accent and clipped with a canvas rect to
+        // the programme-progress fraction. Deterministic (no layout-timing games).
+        val guideHost = KaraokeView(card.context).apply {
             text = progTxt
-            textSize = 11.5f
-            setTextColor(Palette.TEXT)
-            maxLines = 1
-        }, FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT))
-
-        val barHost = FrameLayout(card.context)
-        guideHost.addView(barHost, FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT, dp(card, 3)).apply {
-            gravity = Gravity.BOTTOM
-        })
-        val fraction = (if (now != null) progressOf(now).coerceIn(0f, 1f) else 0f)
-        barHost.post {
-            val w = (barHost.width * fraction).toInt()
-            barHost.addView(View(card.context).apply { setBackground(rounded(this, accent, 2)) },
-                FrameLayout.LayoutParams(w, dp(card, 3)))
+            textSizePx = 11.5f * card.resources.displayMetrics.density
+            baseColor = Palette.TEXT
+            fillColor = accent
+            fraction = (if (now != null) progressOf(now).coerceIn(0f, 1f) else 0f)
         }
         right.addView(guideHost, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            LinearLayout.LayoutParams.MATCH_PARENT, dp(card, 18)).apply {
             topMargin = dp(card, 2)
         })
 
@@ -338,6 +326,53 @@ class BrowseAdapter(
     }
 
     private fun density(v: View): Float = v.resources.displayMetrics.density
+
+    /** Draws guide text twice: base colour full-width, then [fillColor] clipped to
+     *  [fraction] of the width — the "text fills up as the programme plays" look. */
+    private class KaraokeView(context: android.content.Context) : View(context) {
+        var text: String = ""
+        var textSizePx: Float = 0f
+        var baseColor: Int = android.graphics.Color.WHITE
+        var fillColor: Int = android.graphics.Color.WHITE
+        var fraction: Float = 0f
+        private val paint = android.text.TextPaint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+        private val linePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+        private val ellipsis = android.text.TextUtils.TruncateAt.END
+
+        override fun onDraw(canvas: android.graphics.Canvas) {
+            if (text.isEmpty()) return
+            paint.textSize = textSizePx
+            paint.typeface = android.graphics.Typeface.DEFAULT
+            val avail = width
+            val f = fraction.coerceIn(0f, 1f)
+            // base: always fully readable
+            paint.color = baseColor
+            val shown = android.text.TextUtils.ellipsize(text, paint, avail.toFloat(), ellipsis).toString()
+            val baseline = paint.textSize + paint.descent() / 2f
+            canvas.save()
+            canvas.drawText(shown, 0f, baseline, paint)
+            // accent fill clipped to progress fraction (the words "fill up")
+            if (f > 0f) {
+                paint.color = fillColor
+                canvas.clipRect(0f, 0f, avail * f, height.toFloat())
+                canvas.drawText(shown, 0f, baseline, paint)
+            }
+            canvas.restore()
+            // thin full-width progress underline: keeps advancing after the text ends
+            val lineH = 2f * resources.displayMetrics.density
+            val lineY = height - lineH
+            linePaint.color = withAlphaStatic(baseColor, 0x33)
+            canvas.drawRect(0f, lineY, avail.toFloat(), height.toFloat(), linePaint)
+            if (f > 0f) {
+                linePaint.color = fillColor
+                canvas.drawRect(0f, lineY, avail * f, height.toFloat(), linePaint)
+            }
+        }
+
+        private fun withAlphaStatic(color: Int, alpha: Int): Int =
+            android.graphics.Color.argb(alpha, android.graphics.Color.red(color),
+                android.graphics.Color.green(color), android.graphics.Color.blue(color))
+    }
 
     /** Tappable category row (Sports tab landing): group name + count + chevron. */
     @SuppressLint("SetTextI18n")
