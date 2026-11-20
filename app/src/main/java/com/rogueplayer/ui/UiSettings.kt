@@ -23,9 +23,7 @@ object UiSettings {
     const val KEY_ENGINE = "player_engine"
     const val ENGINE_EXO = "exo"
     const val ENGINE_VLC = "vlc"
-    /** Hand the stream to an installed player app (VLC) instead of playing in-app. */
-    const val ENGINE_EXTERNAL = "external"
-    val ENGINE_NAMES = arrayOf("ExoPlayer", "VLC (built in)", "VLC app (external)")
+    val ENGINE_NAMES = arrayOf("ExoPlayer", "VLC (built in)")
 
     // Playback
     const val KEY_FORCE_HLS = "force_hls"     // true = route .m3u8 through HlsMediaSource
@@ -64,11 +62,7 @@ object UiSettings {
     /** Stored engine id; unknown values fall back to ExoPlayer. */
     fun engine(context: Context): String {
         val stored = prefs(context).getString(KEY_ENGINE, ENGINE_EXO)
-        return when (stored) {
-            ENGINE_VLC -> ENGINE_VLC
-            ENGINE_EXTERNAL -> ENGINE_EXTERNAL
-            else -> ENGINE_EXO
-        }
+        return if (stored == ENGINE_VLC) ENGINE_VLC else ENGINE_EXO
     }
 
     fun accentIndex(context: Context): Int =

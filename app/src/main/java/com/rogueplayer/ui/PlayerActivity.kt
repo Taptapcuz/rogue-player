@@ -173,14 +173,16 @@ class PlayerActivity : AppCompatActivity() {
         // VLC is phone-only: the car path needs ExoPlayer's media-session/audio-attribute
         // wiring or Android Auto plays picture with no sound.
         val engine = UiSettings.engine(this)
-        if (engine == UiSettings.ENGINE_EXTERNAL) {
-            // Hand the stream to the VLC app and get out of the way. Everything else in the
-            // app (lists, guide, car) still works; only playback leaves the process.
-            handOffToExternal(lastUrl)
-            return
-        }
         if (engine == UiSettings.ENGINE_VLC) {
             playerView?.visibility = View.GONE
+            // Silence the service engine immediately: it was started by the list screen and
+            // would play underneath VLC until the binding lands.
+            runCatching {
+                startService(
+                    android.content.Intent(this, PlaybackService::class.java)
+                        .setAction(PlaybackService.ACTION_PAUSE)
+                )
+            }
             startVlcEngine()
         }
 
@@ -305,38 +307,6 @@ class PlayerActivity : AppCompatActivity() {
     }
 
 
-
-    /**
-     * Launch an installed player (VLC) with the stream URL.
-     *
-     * Prefers org.videolan.vlc; falls back to any app that handles a video MIME type, then to a share
-     * sheet. The bound ExoPlayer is stopped first so the two players can't fight over audio.
-     *
-     * NOTE: the panel resets connections from non-browser user agents, and an external app
-     * sends its own UA — so a stream that plays in-app may be refused here. That is the
-     * provider's rule, not something this app can override on VLC's behalf.
-     */
-    private fun handOffToExternal(url: String) {
-        if (url.isBlank()) { finish(); return }
-        svc?.let { runCatching { it.stop() } }
-        val uri = android.net.Uri.parse(url)
-        val play = android.content.Intent(android.content.Intent.ACTION_VIEW, uri)
-
-        val toVlc = android.content.Intent(play).setPackage("org.videolan.vlc")
-        val launched = runCatching { startActivity(toVlc); true }.getOrDefault(false)
-        if (!launched) {
-            val typed = android.content.Intent(play).apply {
-                setDataAndType(uri, if (url.contains(".m3u8", true)) "application/x-mpegURL" else "video/*")
-                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-            runCatching {
-                startActivity(android.content.Intent.createChooser(typed, "Play with"))
-            }.onFailure {
-                android.widget.Toast.makeText(this, "No player app found", android.widget.Toast.LENGTH_LONG).show()
-            }
-        }
-        finish()
-    }
 
     /**
      * libVLC path: a SurfaceView under the existing chrome, plus one play/pause button in the
