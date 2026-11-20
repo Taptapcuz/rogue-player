@@ -151,7 +151,9 @@ class SettingsActivity : AppCompatActivity() {
         val bootIdx = UiSettings.bootIndex(this)
         row(
             title = "Boot screen color",
-            sub = UiSettings.ACCENT_NAMES[bootIdx],
+            // The boot screen is drawn from the colour read at launch, and the launcher icon
+            // alias switches with it — neither shows until the app is restarted.
+            sub = "${UiSettings.ACCENT_NAMES[bootIdx]} · changing this reboots the app",
             icon = "✦",
             onClick = {
                 AlertDialog.Builder(this)
