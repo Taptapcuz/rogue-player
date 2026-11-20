@@ -161,6 +161,16 @@ class ProjectionSession : Session() {
             runCatching { svc?.pause() }
         }
 
+        /** Single control for the car: pause if playing, resume if not. */
+        fun togglePlay() {
+            runCatching {
+                val service = svc ?: return
+                if (service.isPlaying()) service.pause() else service.playNow()
+            }
+        }
+
+        fun isPlaying(): Boolean = runCatching { svc?.isPlaying() == true }.getOrDefault(false)
+
         /** Title of whatever is loaded right now, so a list screen can jump back to it. */
         fun currentTitle(): String? = svc?.currentTitle?.takeIf { it.isNotBlank() }
 
@@ -428,6 +438,17 @@ class ProjectionSession : Session() {
                     )
                     .addAction(
                         Action.Builder()
+                            // The label follows the transport state, so one button is both
+                            // play and pause: a head unit has room for three glyphs, not four.
+                            .setIcon(if (play.isPlaying()) pauseIcon() else playIcon())
+                            .setOnClickListener {
+                                play.togglePlay()
+                                invalidate()
+                            }
+                            .build()
+                    )
+                    .addAction(
+                        Action.Builder()
                             .setIcon(stopIcon())
                             // Active by choice: like the browse rows, this action must
                             // work while the head unit reports driving, so the stream can
@@ -460,6 +481,32 @@ class ProjectionSession : Session() {
             val h = c.height.toFloat()
             c.drawLine(w * 0.58f, h * 0.20f, w * 0.34f, h * 0.50f, paint)
             c.drawLine(w * 0.34f, h * 0.50f, w * 0.58f, h * 0.80f, paint)
+        }
+
+        /** Triangle, for "play". */
+        private fun playIcon(): CarIcon = glyphIcon { c, paint ->
+            val w = c.width.toFloat()
+            val h = c.height.toFloat()
+            val fill = android.graphics.Paint(paint)
+            fill.style = android.graphics.Paint.Style.FILL
+            val path = android.graphics.Path().apply {
+                moveTo(w * 0.36f, h * 0.26f)
+                lineTo(w * 0.72f, h * 0.50f)
+                lineTo(w * 0.36f, h * 0.74f)
+                close()
+            }
+            c.drawPath(path, fill)
+        }
+
+        /** Two bars, for "pause". */
+        private fun pauseIcon(): CarIcon = glyphIcon { c, paint ->
+            val w = c.width.toFloat()
+            val h = c.height.toFloat()
+            val fill = android.graphics.Paint(paint)
+            fill.style = android.graphics.Paint.Style.FILL
+            val bar = w * 0.10f
+            c.drawRoundRect(w * 0.34f - bar, h * 0.27f, w * 0.34f + bar, h * 0.73f, 4f, 4f, fill)
+            c.drawRoundRect(w * 0.66f - bar, h * 0.27f, w * 0.66f + bar, h * 0.73f, 4f, 4f, fill)
         }
 
         /** Filled square, for "stop". */
