@@ -148,6 +148,12 @@ class CarWebScreen(
 
     init {
         prewarm()
+        // Ask the host for mic permission from the car session itself — an adb `pm grant`
+        // does not survive a KingInstaller reinstall, so in-car web voice (getUserMedia)
+        // needs this runtime request. No-op when already granted.
+        runCatching {
+            ctx.requestPermissions(listOf(android.Manifest.permission.RECORD_AUDIO)) { _, _ -> }
+        }.onFailure { Log.w(TAG, "record-audio request failed", it) }
         lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onCreate(owner: LifecycleOwner) {
                 runCatching { ctx.getCarService(AppManager::class.java).setSurfaceCallback(surfaceCallback) }
@@ -269,6 +275,17 @@ class CarWebScreen(
                 }
 
                 override fun onHideCustomView() = hideCustom()
+
+                /**
+                 * Grant the page's mic request so in-car web voice search works (the
+                 * CarStream trick). RECORD_AUDIO must also be granted to the app at
+                 * runtime — the car session can't prompt, so it's granted on the phone
+                 * side (or via `adb pm grant`).
+                 */
+                override fun onPermissionRequest(request: android.webkit.PermissionRequest) {
+                    Log.i(TAG, "mic/permission request: ${request.resources.joinToString()} from ${request.origin}")
+                    runCatching { request.grant(request.resources) }
+                }
             }
         }
         // Bridge the on-page search box back to MYTV's URL-load path (see SearchBridge).
@@ -380,7 +397,17 @@ class CarWebScreen(
         .build()
 
     private fun headerStrip(): ActionStrip =
-        ActionStrip.Builder().addAction(Action.APP_ICON).build()
+        ActionStrip.Builder()
+            // Single-tap BACK in the header. The bottom map strip's chevron needs two
+            // taps (the host gives the first to the navigation surface), which left the
+            // user stranded on the web-search screen. A header action is single-tap.
+            .addAction(
+                Action.Builder()
+                    .setIcon(backIcon())
+                    .setOnClickListener { goBack() }
+                    .build()
+            )
+            .build()
 
     private fun mapStrip(): ActionStrip =
         ActionStrip.Builder()

@@ -59,12 +59,29 @@ class ProjectionSession : Session() {
     override fun onCreateScreen(intent: Intent): Screen {
         val surface = CarVideoSurface(carContext) { s -> carPlay.renderTo(s) }
             .also { videoSurface = it }
-        // The surface callback is registered by VideoScreen, not here: AA allocates
-        // a navigation surface per *screen*, and the sample (android/car-samples
-        // navigation SurfaceRenderer) registers it from the screen's lifecycle. Doing
-        // it at session level meant the host handed us a surface while no navigation
-        // template was up, and reclaimed it ~180ms later.
-        return RootScreen(carContext, surface, carPlay)
+        // The car home is the landing (neon boot → grid page), rendered into the
+        // host surface rather than a template. Each tile owns its navigation:
+        // Live/YouTube/Playlists have screens, Movies/Shows/Guide get browse screens.
+        return CarLandingScreen(
+            carContext,
+            onTile = { screen, tile ->
+                val play: (String, String) -> Unit = { url, title -> carPlay.play(url, title) }
+                val openPlayer: (Screen, String) -> Unit = { host, title ->
+                    host.screenManager.push(VideoScreen(carContext, surface, carPlay, title))
+                }
+                when (tile) {
+                    CarLandingTile.LIVE -> screen.screenManager.push(
+                        RootScreen(carContext, surface, carPlay))
+                    CarLandingTile.MOVIES -> screen.screenManager.push(
+                        CarMovieScreen(carContext, play, openPlayer))
+                    CarLandingTile.SHOWS -> screen.screenManager.push(
+                        CarShowScreen(carContext, play, openPlayer))
+                    CarLandingTile.YOUTUBE -> screen.screenManager.push(
+                        CarWebScreen(carContext, "https://m.youtube.com"))
+                }
+            },
+            onWeb = { it.screenManager.push(CarWebScreen(carContext, "https://www.google.com")) },
+        )
     }
 
     /**
@@ -244,7 +261,7 @@ class ProjectionSession : Session() {
 
             return ListTemplate.Builder()
                 .setTitle("MYTV — Live")
-                .setHeaderAction(Action.APP_ICON)
+                .setHeaderAction(Action.BACK)
                 .setSingleList(list.build())
                 .setActionStrip(
                     ActionStrip.Builder()

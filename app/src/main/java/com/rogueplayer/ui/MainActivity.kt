@@ -128,8 +128,13 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         window.statusBarColor = Palette.BG
         UiSettings.applyBrightness(this)
-        // Launch target is a setting now (Home landing or Live tab).
-        tab = if (UiSettings.launchToLive(this)) Tab.LIVE else Tab.HOME
+        // A fresh launch (brand boot) owns the root /Home landing. Returning to a
+        // recreated task — Android Auto auto-resumes us in the background, so the
+        // process may be rebuilt while the user isn't looking — must restore the
+        // last session instead of dumping the user back on the landing.
+        val fresh = consumeFreshMarker()
+        if (fresh) clearSession()
+        tab = restoredSessionTab(fresh)
         if (intent?.getBooleanExtra(EXTRA_OPEN_SOURCES, false) == true) tab = Tab.PLAYLISTS
         shownAccent = UiSettings.accentIndex(this)
         loadFavorites()
@@ -180,6 +185,49 @@ class MainActivity : AppCompatActivity() {
             if (selectedGroup == FAV_FILTER && tab == Tab.LIVE) reload()
             else adapter.notifyDataSetChanged()
         }
+    }
+
+    /**
+     * Persist where the user is so a recreated task (Android Auto auto-resume,
+     * process death) can restore the session instead of re-showing the landing.
+     */
+    override fun onStop() {
+        super.onStop()
+        if (!isChangingConfigurations) saveSession()
+    }
+
+    /**
+     * One-shot \"just booted\" marker. Splash sets it before handing off; here we read
+     * and clear it so it can only claim \"fresh\" once. A persistent intent extra can't
+     * do this job — a killed background task recreates MainActivity with the SAME
+     * launch intent, so an extra would report \"fresh\" on every resurrection and the
+     * session could never be restored.
+     */
+    private fun consumeFreshMarker(): Boolean {
+        val p = sessionPrefs()
+        val fresh = p.getBoolean(FRESH_PENDING, false)
+        if (fresh) p.edit().remove(FRESH_PENDING).apply()
+        return fresh
+    }
+
+    private fun sessionPrefs() = getSharedPreferences(SESSION_PREFS, MODE_PRIVATE)
+
+    private fun saveSession() {
+        // Skip the transient Sources/Playlists screen, which is a settings surface,
+        // not a place the user sits; restoring on it would be surprising.
+        if (tab == Tab.PLAYLISTS) return
+        sessionPrefs().edit().putInt(SESSION_TAB, tab.ordinal).apply()
+    }
+
+    private fun clearSession() = sessionPrefs().edit().clear().apply()
+
+    /** Fresh launch → the configured root (Home landing unless launch-to-Live). */
+    private fun restoredSessionTab(fresh: Boolean): Tab {
+        if (!fresh) {
+            val saved = sessionPrefs().getInt(SESSION_TAB, -1)
+            if (saved >= 0) return Tab.entries.getOrNull(saved) ?: Tab.HOME
+        }
+        return if (UiSettings.launchToLive(this)) Tab.LIVE else Tab.HOME
     }
 
     /** Read the shared favourites set. */
@@ -1795,6 +1843,12 @@ class MainActivity : AppCompatActivity() {
     companion object {
         /** Intent extra: open straight into the Sources/Playlists tab (from Settings). */
         const val EXTRA_OPEN_SOURCES = "open_sources"
+        /** Intent extra: set by the brand boot — the landing is the root only on a fresh launch. */
+        const val EXTRA_FRESH_LAUNCH = "fresh_launch"
+        /** One-shot marker the splash sets and MainActivity consumes (see consumeFreshMarker). */
+        const val FRESH_PENDING = "fresh_pending"
+        const val SESSION_PREFS = "mytv_session"
+        const val SESSION_TAB = "tab"
         private const val MENU_LIVE_LIST = 1
         private const val MENU_GUIDE = 2
     }

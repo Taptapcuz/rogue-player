@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Locked (premium) edition of Rogue Player. Basic inherits the base label
+         from src/main ("Rogue Player"); the locked label is kept parallel so the
+         two editions are distinct in the launcher. -->
+    <string name="app_name">Rogue Player</string>
+    <string name="car_service_label">Rogue Player in car</string>
+</resources>

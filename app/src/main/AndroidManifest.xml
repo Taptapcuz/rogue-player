@@ -4,6 +4,8 @@
     <!-- Network -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Mic for in-car web voice search (WebView getUserMedia), like CarStream. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <!-- Android Auto / Android for Cars projection surface -->
     <uses-permission android:name="androidx.car.app.ACCESS_SURFACE" />

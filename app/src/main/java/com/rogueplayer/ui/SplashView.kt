@@ -146,7 +146,12 @@ class SplashView @JvmOverloads constructor(
             textSize = 1f; textSkewX = -0.18f; typeface = typeface()
         }
         val fit = nw * 0.82f
-        val size = fit / type.measureText(LINE2)
+        // Cap by HEIGHT as well as width. On a phone portrait this is width-limited
+        // (unchanged), but on a wide landscape surface (car head unit) fitting only the
+        // width makes the two stacked lines taller than the screen and clips ROGUE off
+        // the top. The two lines span ~2.3*size centred at 0.46*nh, so ~0.33*nh is the
+        // tallest that fits with margin.
+        val size = minOf(fit / type.measureText(LINE2), nh * 0.31f)
         type.textSize = size
 
         val radius = sqrt((w / 2f) * (w / 2f) + (h / 2f) * (h / 2f)).toFloat()

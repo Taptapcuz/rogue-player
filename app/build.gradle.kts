@@ -8,7 +8,7 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.mytv.app"
+        applicationId = "com.rogueplayer"
         minSdk = 29
         targetSdk = 36
         versionCode = 1
@@ -23,23 +23,22 @@ android {
         }
     }
 
-    // Two installable versions of the same app, side by side on one device.
-    //  - "clone" keeps the personal IMPlayer-style build (com.mytv.app).
-    //  - "clean" is the publish-safe redesign (own app id + label) built part by part.
-    // A different applicationId lets both live on one phone at the same time.
-    // Visual differences for "clean" go in app/src/clean/... overrides; shared
-    // code stays in app/src/main.
+    // Two editions of the same app, both branded Rogue Player, installable side
+    // by side on one device via distinct applicationIds. Built whole first, then
+    // the feature split gates: Basic (free, core playback + EPG) vs Locked
+    // (premium, advanced gated features). Per-edition overrides go in
+    // app/src/<flavor>/...; shared code stays in app/src/main.
     flavorDimensions += "edition"
     productFlavors {
-        create("clone") {
+        create("basic") {
             dimension = "edition"
-            applicationId = "com.mytv.app"
-            versionName = "1.0-clone"
+            applicationId = "com.rogueplayer.basic"
+            versionName = "1.0-basic"
         }
-        create("clean") {
+        create("locked") {
             dimension = "edition"
-            applicationId = "com.mytv.app.clean"
-            versionName = "1.0-clean"
+            applicationId = "com.rogueplayer.locked"
+            versionName = "1.0-locked"
         }
     }
 

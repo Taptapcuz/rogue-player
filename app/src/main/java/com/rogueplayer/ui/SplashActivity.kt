@@ -1,5 +1,6 @@
 package com.rogueplayer.ui
 
+import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.widget.FrameLayout
@@ -28,8 +29,14 @@ class SplashActivity : AppCompatActivity() {
 
     /** Fade the splash out, then hand off to the main UI. */
     private fun transition() {
+        // One-shot "fresh boot" marker: MainActivity reads+clears it, so the Home
+        // landing is the root only on a genuine launch (a killed task resurrected
+        // from recents loses the marker and restores its last session instead).
+        getSharedPreferences(MainActivity.SESSION_PREFS, Context.MODE_PRIVATE)
+            .edit().putBoolean(MainActivity.FRESH_PENDING, true).commit()
         splash.animate().alpha(0f).setDuration(300).withEndAction {
-            startActivity(Intent(this, MainActivity::class.java))
+            startActivity(Intent(this, MainActivity::class.java)
+                .putExtra(MainActivity.EXTRA_FRESH_LAUNCH, true))
             overridePendingTransition(0, 0)
             finish()
         }.start()
