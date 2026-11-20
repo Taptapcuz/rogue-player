@@ -3,6 +3,7 @@ package com.rogueplayer
 import android.app.Application
 import android.util.Log
 import com.rogueplayer.data.PlaylistRepository
+import com.rogueplayer.ui.AppIcon
 import com.rogueplayer.ui.Palette
 import com.rogueplayer.ui.UiSettings
 import java.io.File
@@ -18,6 +19,8 @@ class MyApplication : Application() {
         // Load the user's chosen accent into the global palette at start, so every
         // screen that reads Palette.ACCENTS the moment it builds picks it up.
         Palette.ACCENTS = UiSettings.ACCENT_PALETTES[UiSettings.accentIndex(this)]
+        // Keep the launcher icon in the stored boot-screen colour (alias swap; no-op when set).
+        AppIcon.sync(this)
         repository = PlaylistRepository(this)
     }
 

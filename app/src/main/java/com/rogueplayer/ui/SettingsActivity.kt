@@ -158,6 +158,8 @@ class SettingsActivity : AppCompatActivity() {
                     .setTitle("Boot screen color")
                     .setSingleChoiceItems(UiSettings.ACCENT_NAMES, UiSettings.bootIndex(this)) { d, which ->
                         UiSettings.prefs(this@SettingsActivity).edit().putInt(UiSettings.KEY_BOOT, which).apply()
+                        // Re-skin the launcher icon to the new boot colour (alias swap).
+                        AppIcon.apply(this@SettingsActivity, which)
                         d.dismiss()
                         render()
                     }
