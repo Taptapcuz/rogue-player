@@ -116,7 +116,36 @@ class PlaylistRepository(context: Context) {
     fun isGroupHidden(playlistName: String, group: String): Boolean =
         group in hiddenGroups(playlistName)
 
-    /** Bump so screens that cache a page can tell the mask changed. */
+    // ------------------------------------------------- category order ---
+
+    /**
+     * User-chosen category order, per playlist. Stored as a single delimited
+     * string (a StringSet would lose order). Groups not in this list fall back
+     * to alphabetical after the pinned ones, so a re-fetched playlist with new
+     * categories still lists sensibly.
+     */
+    fun groupOrder(playlistName: String): List<String> {
+        val raw = prefs.getString("order:$playlistName", null) ?: return emptyList()
+        if (raw.isEmpty()) return emptyList()
+        return raw.split(SEP).filter { it.isNotBlank() }
+    }
+
+    fun setGroupOrder(playlistName: String, order: List<String>) {
+        prefs.edit().putString("order:$playlistName", order.joinToString(SEP)).apply()
+        _groupsVersion.value = _groupsVersion.value + 1
+    }
+
+    /** Sort [groups] by the saved custom order, unpinned ones alphabetical after. */
+    fun orderGroups(playlistName: String, groups: List<String>): List<String> {
+        val order = groupOrder(playlistName)
+        if (order.isEmpty()) return groups.sortedBy { it.lowercase() }
+        val rank = order.withIndex().associate { (i, g) -> g to i }
+        return groups.sortedWith(
+            compareBy<String> { rank[it] ?: Int.MAX_VALUE }
+                .thenBy { it.lowercase() }
+        )
+    }
+
     private val _groupsVersion = MutableStateFlow(0)
     val groupsVersion: StateFlow<Int> = _groupsVersion.asStateFlow()
 
@@ -138,12 +167,13 @@ class PlaylistRepository(context: Context) {
     }
 
     /** Every category of [playlist] with its channel count, in display order. */
-    fun categories(playlist: Playlist): List<Pair<String, Int>> =
-        playlist.channels
+    fun categories(playlist: Playlist): List<Pair<String, Int>> {
+        val counts = playlist.channels
             .filter { it.group.isNotBlank() }
             .groupBy { it.group }
-            .map { (group, channels) -> group to channels.size }
-            .sortedBy { it.first.lowercase() }
+        val ordered = orderGroups(playlist.name, counts.keys.toList())
+        return ordered.map { g -> g to (counts[g]?.size ?: 0) }
+    }
 
     // ------------------------------------------------------------- EPG ---
 
@@ -221,6 +251,8 @@ class PlaylistRepository(context: Context) {
     private companion object {
         /** How long a stored guide is trusted before asking the provider again. */
         const val EPG_FRESH_MS = 4L * 3600_000L
+        /** Delimiter for the persisted per-playlist category order string. */
+        const val SEP = "\u001F"
     }
 
     // ---------------------------------------------------------- series ---

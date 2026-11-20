@@ -38,4 +38,5 @@ sealed interface BrowseItem {
     data class ChannelCard(val ch: Channel) : BrowseItem     // rounded live-TV card
     data class PosterCard(val e: Entry, val isMovie: Boolean) : BrowseItem // poster card
     data class EpisodeItem(val ep: Episode, val seriesTitle: String) : BrowseItem // series episode
+    data class GroupRow(val group: String, val count: Int) : BrowseItem // tappable category row (Sports)
 }

@@ -121,7 +121,16 @@ class MainActivity : AppCompatActivity() {
         LIVE("Live TV", "Live TV", R.drawable.ic_nav_live),
         MOVIES("Movies", "Movies", R.drawable.ic_nav_movies),
         SHOWS("TV Shows", "TV Shows", R.drawable.ic_nav_tv),
+        SPORTS("Sports", "Sports", R.drawable.ic_nav_sports),
+        // Playlists is no longer a bottom-nav tab (Sports took slot 5); it stays
+        // in the enum so Settings and the Home landing tile can still open it.
         PLAYLISTS("Playlists", "Playlists", R.drawable.ic_nav_playlists),
+        ;
+
+        companion object {
+            /** Bottom-nav tabs, in order. Excludes PLAYLISTS (Settings/landing only). */
+            val NAV = listOf(HOME, LIVE, MOVIES, SHOWS, SPORTS)
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -507,16 +516,34 @@ class MainActivity : AppCompatActivity() {
         Tab.SHOWS -> listOf("All TV Shows" to (selectedGroup == null)) +
             groupsOf(pl) { p -> p.series.map { it.group } }
                 .map { g -> g to (g == selectedGroup) }
+        Tab.SPORTS -> listOf("All Sports" to (selectedGroup == null)) +
+            groupsOf(pl) { p -> p.channels.map { it.group } }
+                .filter { isSportGroup(it) }
+                .map { g -> g to (g == selectedGroup) }
         else -> emptyList()
     }
 
-    /** A playlist's groups minus the ones the user hid, sorted for the chip row. */
+    /** Group names that read as sports: keyword match on the category label. */
+    private fun isSportGroup(group: String): Boolean {
+        val g = group.lowercase()
+        return SPORT_KEYWORDS.any { g.contains(it) }
+    }
+
+    /** Sports tab: a group-row tap opens that category's channels. */
+    private fun openSportGroup(group: String) {
+        pushState()
+        selectedGroup = group
+        reload()
+        listView?.scrollToPosition(0)
+    }
+
+    /** A playlist's groups minus the ones the user hid, in the saved custom order. */
     private fun groupsOf(pl: Playlist?, pick: (Playlist) -> List<String>): List<String> {
         if (pl == null) return emptyList()
         val hidden = app.repository.hiddenGroups(pl.name)
-        return pick(pl).distinct()
+        val visible = pick(pl).distinct()
             .filter { it.isNotBlank() && it !in hidden }
-            .sortedBy { it.lowercase() }
+        return app.repository.orderGroups(pl.name, visible)
     }
 
     /** (Re)build the chip rows from [defs]; "All" is the first label. */
@@ -524,7 +551,7 @@ class MainActivity : AppCompatActivity() {
         container.removeAllViews()
         defs.forEach { (label, active) ->
             val isAll = label == "All Channels" || label == "All Movies" ||
-                label == "All TV Shows" || label == "All Sections"
+                label == "All TV Shows" || label == "All Sections" || label == "All Sports"
             container.addView(chip(label, active, isAll), LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
                 marginEnd = dp(8)
@@ -568,7 +595,7 @@ class MainActivity : AppCompatActivity() {
     private fun renderNav() {
         val row = navRow ?: return
         row.removeAllViews()
-        Tab.entries.forEach { t ->
+        Tab.NAV.forEach { t ->
             val active = t == tab
             val item = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
@@ -883,6 +910,7 @@ class MainActivity : AppCompatActivity() {
             onEpisode = onClickEpisode,
             onChannelLong = { ch -> toggleFavorite(ch) },
             pillCards = resources.getBoolean(R.bool.rp_pill_cards),
+            onGroup = { g -> openSportGroup(g) },
         ).apply { favoriteIds = favorites.toSet() }
         val list = RecyclerView(this).apply {
             clipToPadding = false
@@ -977,7 +1005,7 @@ class MainActivity : AppCompatActivity() {
         if (pl == null) {
             adapter.submitList(emptyList())
             tvPlaceholder.visibility = View.VISIBLE
-            tvPlaceholder.text = "No playlist yet.\nTap “Playlists” (bottom right) for an M3U link or Xtream login."
+            tvPlaceholder.text = "No playlist yet.\nOpen Settings → Playlists to add an M3U link or Xtream login."
             return
         }
 
@@ -1030,6 +1058,11 @@ class MainActivity : AppCompatActivity() {
 
         val chans = if (filter == FAV_FILTER) {
             visible(channels.filter { it.id in favorites }) { it.group }
+        } else if (tab == Tab.SPORTS) {
+            // Sports tab: only channels in sport-y groups, further narrowed by the
+            // selected sport chip (effectiveFilter) when one is chosen.
+            val sport = visible(channels.filter { isSportGroup(it.group) }) { it.group }
+            filterBy(sport) { it.group }
         } else {
             filterBy(visible(channels) { it.group }) { it.group }
         }
@@ -1057,6 +1090,24 @@ class MainActivity : AppCompatActivity() {
                 BrowseItem.SectionTitle(filter ?: "All TV Shows",
                     Titles.count(shws.size)) as BrowseItem) +
                 shws.map { BrowseItem.PosterCard(it, false) as BrowseItem }
+            Tab.SPORTS -> {
+                if (effectiveFilter == null) {
+                    // Landing: list the sport GROUPS as tappable rows.
+                    val sportGroups = groupsOf(pl) { p -> p.channels.map { it.group } }
+                        .filter { isSportGroup(it) }
+                    val rows = sportGroups.map { g ->
+                        val n = channels.count { it.group == g && it.group !in hiddenGroups }
+                        BrowseItem.GroupRow(g, n) as BrowseItem
+                    }
+                    listOf(BrowseItem.SectionTitle("Sports Categories",
+                        "${Titles.count(sportGroups.size)} groups") as BrowseItem) + rows
+                } else {
+                    // Inside a group: show its channels.
+                    listOf(BrowseItem.SectionTitle(filter,
+                        "${Titles.count(chans.size)} channels") as BrowseItem) +
+                        chans.map { BrowseItem.ChannelCard(it) as BrowseItem }
+                }
+            }
             else -> channels.map { BrowseItem.ChannelCard(it) as BrowseItem }
         }
         return Page(items, buildChipDefs(tab, filter, pl))
@@ -1385,7 +1436,9 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        categories.forEach { (group, count) ->
+        val orderedGroups = categories.map { it.first }
+        categories.forEachIndexed { index, pair ->
+            val (group, count) = pair
             val isHidden = group in hidden
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -1418,6 +1471,13 @@ class MainActivity : AppCompatActivity() {
             })
             row.addView(textCol, LinearLayout.LayoutParams(
                 0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            // Reorder arrows: move this category up/down in the saved order.
+            row.addView(reorderArrow("▲", enabled = index > 0) {
+                moveCategory(pl, orderedGroups, index, -1)
+            })
+            row.addView(reorderArrow("▼", enabled = index < orderedGroups.size - 1) {
+                moveCategory(pl, orderedGroups, index, +1)
+            })
             row.addView(TextView(this).apply {
                 text = if (isHidden) "HIDDEN" else "SHOWN"
                 textSize = 9.5f
@@ -1431,6 +1491,31 @@ class MainActivity : AppCompatActivity() {
                 bottomMargin = dp(6)
             })
         }
+    }
+
+    /** Small tappable up/down arrow for reordering a category row. */
+    private fun reorderArrow(glyph: String, enabled: Boolean, onClick: () -> Unit): TextView =
+        TextView(this).apply {
+            text = glyph
+            textSize = 15f
+            gravity = Gravity.CENTER
+            setTextColor(if (enabled) Palette.TEXT else Palette.MUTED)
+            setBackground(rounded(Palette.CARD_HI, 8))
+            setPadding(dp(9), dp(4), dp(9), dp(4))
+            alpha = if (enabled) 1f else 0.4f
+            isEnabled = enabled
+            setOnClickListener { if (enabled) onClick() }
+        }
+
+    /** Move the category at [index] by [delta] in the saved order, then persist. */
+    private fun moveCategory(pl: Playlist, currentOrder: List<String>, index: Int, delta: Int) {
+        val to = index + delta
+        if (to < 0 || to >= currentOrder.size) return
+        val list = currentOrder.toMutableList()
+        val moved = list.removeAt(index)
+        list.add(to, moved)
+        app.repository.setGroupOrder(pl.name, list)
+        renderContent()   // rebuild the Categories screen in the new order
     }
 
     /**
@@ -1865,6 +1950,15 @@ class MainActivity : AppCompatActivity() {
         const val SESSION_TAB = "tab"
         private const val MENU_LIVE_LIST = 1
         private const val MENU_GUIDE = 2
+
+        /** Group-name keywords that make a category show under the Sports tab. */
+        val SPORT_KEYWORDS = listOf(
+            "sport", "nba", "nfl", "mlb", "nhl", "mls", "wnba", "ncaa", "espn",
+            "ufc", "boxing", "wwe", "motogp", "f1", "formula", "nascar", "indycar",
+            "soccer", "football", "basketball", "baseball", "hockey", "tennis",
+            "golf", "cricket", "rugby", "league", "cup", "fight", "ppv", "racing",
+            "olympic", "epl", "champions", "euros", "premier", "laliga", "serie a",
+        )
     }
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()

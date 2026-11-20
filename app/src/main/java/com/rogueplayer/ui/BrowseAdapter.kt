@@ -33,6 +33,7 @@ class BrowseAdapter(
     private val onEpisode: (Episode, String) -> Unit = { _, _ -> },
     private val onChannelLong: (Channel) -> Unit = {},
     private val pillCards: Boolean = false,
+    private val onGroup: (String) -> Unit = {},
 ) : ListAdapter<BrowseItem, RecyclerView.ViewHolder>(DIFF) {
 
     /** Favourited channel ids — starred rows and long-press handled by the host. */
@@ -58,6 +59,7 @@ class BrowseAdapter(
         is BrowseItem.PosterCard -> if (compactPosters) TYPE_POSTER_ROW else TYPE_POSTER_TILE
         is BrowseItem.SectionTitle -> TYPE_SECTION
         is BrowseItem.EpisodeItem -> TYPE_EPISODE
+        is BrowseItem.GroupRow -> TYPE_GROUP
         is BrowseItem.Message -> TYPE_MESSAGE
         else -> TYPE_MESSAGE
     }
@@ -86,6 +88,7 @@ class BrowseAdapter(
             }
             is BrowseItem.SectionTitle -> renderSectionTitle(holder.itemView, item)
             is BrowseItem.EpisodeItem -> renderEpisodeRow(holder.itemView, item)
+            is BrowseItem.GroupRow -> renderGroupRow(holder.itemView, item.group, item.count)
             is BrowseItem.Message -> (holder.itemView as TextView).apply {
                 text = item.text; setTextColor(Palette.MUTED); textSize = 13f; gravity = Gravity.CENTER
             }
@@ -204,17 +207,13 @@ class BrowseAdapter(
     private fun renderChannelPill(v: View, ch: Channel) {
         val card = v as FrameLayout
         card.removeAllViews()
-        // The WHOLE capsule is the progress body: card-colour underlay, and the
-        // accent fills the pill from the left edge toward the right as the
-        // programme plays. Clipped to the rounded shape so it never bleeds out.
-        val now = nowPlaying[ch.id]
-        val fraction = (if (now != null) progressOf(now).coerceIn(0f, 1f) else 0f)
-        card.setBackground(PillFillDrawable(Palette.CARD, accent, fraction, 36f * density(card)))
+        // capsule container; a thin accent progress bar sits under the guide text.
+        card.setBackground(rounded(card, Palette.CARD, 42))
 
         val col = LinearLayout(card.context).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(card, 8), dp(card, 8), dp(card, 14), dp(card, 8))
+            setPadding(dp(card, 8), dp(card, 10), dp(card, 14), dp(card, 10))
         }
         card.addView(col, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
@@ -225,13 +224,11 @@ class BrowseAdapter(
         }
         row.addView(logoTile(col, initialsOf(ch.name), hueFor(ch), 48, circular = true))
 
+        val now = nowPlaying[ch.id]
         val next = nextPlaying[ch.id]
         val right = LinearLayout(card.context).apply { orientation = LinearLayout.VERTICAL }
-        // name + programme line: strong + readable on both the dark underlay and
-        // the accent fill (region prefix caps the channel title, as before)
-        val nameTxt = ch.name
         right.addView(TextView(card.context).apply {
-            text = nameTxt
+            text = ch.name
             textSize = 14.5f
             setTypeface(null, Typeface.BOLD)
             setTextColor(Palette.TEXT)
@@ -244,17 +241,37 @@ class BrowseAdapter(
             maxLines = 1
         })
         val progTxt = when {
-            now != null && next != null ->
-                "${time(now.start)} - ${time(now.end)} · ${now.title}"
+            now != null && next != null -> "${time(now.start)} - ${time(now.end)} · ${now.title}"
             now != null -> "${time(now.start)} - ${time(now.end)}"
             else -> ch.group.replace("_", " ")
         }
-        right.addView(TextView(card.context).apply {
+        // Guide line with a thin accent progress bar drawn OVER the text (across
+        // its lower edge), so the fill rides on top of the guide info.
+        val guideHost = FrameLayout(card.context)
+        guideHost.addView(TextView(card.context).apply {
             text = progTxt
             textSize = 11.5f
             setTextColor(Palette.TEXT)
             maxLines = 1
+        }, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT))
+
+        val barHost = FrameLayout(card.context)
+        guideHost.addView(barHost, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, dp(card, 3)).apply {
+            gravity = Gravity.BOTTOM
         })
+        val fraction = (if (now != null) progressOf(now).coerceIn(0f, 1f) else 0f)
+        barHost.post {
+            val w = (barHost.width * fraction).toInt()
+            barHost.addView(View(card.context).apply { setBackground(rounded(this, accent, 2)) },
+                FrameLayout.LayoutParams(w, dp(card, 3)))
+        }
+        right.addView(guideHost, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(card, 2)
+        })
+
         row.addView(right, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             .apply { setMargins(dp(card, 12), 0, dp(card, 6), 0) })
         col.addView(row, LinearLayout.LayoutParams(
@@ -315,9 +332,54 @@ class BrowseAdapter(
         override fun setAlpha(a: Int) {}
         override fun setColorFilter(cf: android.graphics.ColorFilter?) {}
         override fun getOpacity(): Int = android.graphics.PixelFormat.TRANSLUCENT
+        override fun getOutline(outline: android.graphics.Outline) {
+            outline.setRoundRect(bounds, radiusPx)
+        }
     }
 
     private fun density(v: View): Float = v.resources.displayMetrics.density
+
+    /** Tappable category row (Sports tab landing): group name + count + chevron. */
+    @SuppressLint("SetTextI18n")
+    private fun renderGroupRow(v: View, group: String, count: Int) {
+        val row = v as FrameLayout
+        row.removeAllViews()
+        row.setBackground(rounded(row, Palette.CARD, if (pillCards) 30 else 12))
+
+        val inner = LinearLayout(row.context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(row, 16), dp(row, 10), dp(row, 16), dp(row, 10))
+        }
+        row.addView(inner, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+
+        inner.addView(TextView(row.context).apply {
+            text = group.replace("_", " ")
+            textSize = 15f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Palette.TEXT)
+            maxLines = 1
+        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+
+        inner.addView(TextView(row.context).apply {
+            text = "$count"
+            textSize = 12f
+            setTextColor(Color.WHITE)
+            background = rounded(row, withAlpha(accent, 0xE0), 12)
+            setPadding(dp(row, 10), dp(row, 3), dp(row, 10), dp(row, 3))
+            gravity = Gravity.CENTER
+        })
+
+        inner.addView(TextView(row.context).apply {
+            text = "›"
+            textSize = 20f
+            setTextColor(Palette.MUTED)
+            setPadding(dp(row, 10), 0, 0, 0)
+        })
+
+        row.setOnClickListener { onGroup(group) }
+    }
 
     /** What fraction of [p] has elapsed right now (0..1). */
     private fun progressOf(p: EpgProgram): Float =
@@ -422,7 +484,9 @@ class BrowseAdapter(
             TYPE_CHANNEL -> FrameLayout(parent.context).apply {
                 layoutParams = RecyclerView.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
-                    dp(parent, if (pillCards) 92 else 74))
+                    dp(parent, if (pillCards) 84 else 74)).apply {
+                    if (pillCards) { topMargin = dp(parent, 4); bottomMargin = dp(parent, 4) }
+                }
             }
             TYPE_POSTER_TILE, TYPE_POSTER_ROW ->
                 PosterCell(parent.context, compact = viewType == TYPE_POSTER_ROW).apply {
@@ -432,6 +496,10 @@ class BrowseAdapter(
             TYPE_EPISODE -> FrameLayout(parent.context).apply {
                 layoutParams = RecyclerView.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, dp(parent, 58))
+            }
+            TYPE_GROUP -> FrameLayout(parent.context).apply {
+                layoutParams = RecyclerView.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(parent, 60))
             }
             TYPE_SECTION -> LinearLayout(parent.context).apply {
                 orientation = LinearLayout.VERTICAL
@@ -488,5 +556,6 @@ class BrowseAdapter(
         const val TYPE_SECTION = 5
         const val TYPE_POSTER_ROW = 6
         const val TYPE_EPISODE = 7
+        const val TYPE_GROUP = 8
     }
 }
