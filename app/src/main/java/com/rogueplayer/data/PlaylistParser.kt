@@ -208,6 +208,9 @@ object PlaylistParser {
 
     private fun loadXtreamVod(baseUrl: String): List<Entry> {
         return try {
+            // `get_vod_streams` rows carry ONLY `category_id` — the human name lives in a
+            // separate call. Without this map every movie collapsed into one "Movies" group.
+            val categories = loadCategoryNames("$baseUrl&action=get_vod_categories")
             val json = fetchText("$baseUrl&action=get_vod_streams")
             val rows = parseGenericStreams(json, "stream_id")
             rows.mapNotNull { s ->
@@ -215,7 +218,9 @@ object PlaylistParser {
                 Entry(
                     id = id,
                     name = s["name"] ?: "?",
-                    group = s["category_name"] ?: "Movies",
+                    group = s["category_name"]?.takeIf { it.isNotBlank() }
+                        ?: categories[s["category_id"].orEmpty()]
+                        ?: "Movies",
                     url = buildVodUrl(baseUrl, id),
                     logo = s["stream_icon"]?.takeIf { it.isNotBlank() },
                     description = (s["plot"] ?: s["description"])?.takeIf { it.isNotBlank() },
@@ -229,6 +234,7 @@ object PlaylistParser {
 
     private fun loadXtreamSeries(baseUrl: String): List<Entry> {
         return try {
+            val categories = loadCategoryNames("$baseUrl&action=get_series_categories")
             val json = fetchText("$baseUrl&action=get_series")
             val rows = parseGenericStreams(json, "series_id")
             rows.mapNotNull { s ->
@@ -236,7 +242,9 @@ object PlaylistParser {
                 Entry(
                     id = id,
                     name = s["name"] ?: "?",
-                    group = s["category_name"] ?: "Series",
+                    group = s["category_name"]?.takeIf { it.isNotBlank() }
+                        ?: categories[s["category_id"].orEmpty()]
+                        ?: "Series",
                     url = buildSeriesUrl(baseUrl, id),
                     logo = s["cover"]?.takeIf { it.isNotBlank() } ?: s["stream_icon"]?.takeIf { it.isNotBlank() },
                     description = (s["plot"] ?: s["description"])?.takeIf { it.isNotBlank() },
@@ -489,6 +497,27 @@ object PlaylistParser {
         parseGenericStreams(json, "stream_id")
 
     /** Parse a JSON array of objects into string maps using org.json (no regex). */
+
+    /**
+     * Xtream returns categories as their own list: `[{category_id, category_name}, …]`.
+     * VOD/series rows reference them by id only, so this map is what turns ids into the
+     * provider's real group names ("Movies | New Releases", "TV | Drama", …).
+     */
+    private fun loadCategoryNames(url: String): Map<String, String> {
+        val out = HashMap<String, String>()
+        runCatching {
+            val arr = JSONArray(fetchText(url))
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val id = o.optString("category_id").takeIf { it.isNotBlank() } ?: continue
+                val name = o.optString("category_name").takeIf { it.isNotBlank() } ?: continue
+                out[id] = name
+            }
+        }.onFailure { Log.w(TAG, "category fetch failed: $url", it) }
+        Log.d(TAG, "categories from $url -> ${out.size}")
+        return out
+    }
+
     private fun parseGenericStreams(json: String, requiredKey: String): List<Map<String, String>> {
         val out = mutableListOf<Map<String, String>>()
         try {

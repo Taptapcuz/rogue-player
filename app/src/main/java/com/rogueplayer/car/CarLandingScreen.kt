@@ -77,6 +77,9 @@ class CarLandingScreen(
     private var viewW = 0
     private var viewH = 0
 
+    /** Host-reported unobstructed area of the surface (diagnostics + click mapping). */
+    private val visibleArea = android.graphics.Rect()
+
     /** Last surface + geometry, so a resume can re-show the page without a fresh
      *  onSurfaceAvailable (AA often keeps the surface across background/foreground). */
     private var lastSurface: Surface? = null
@@ -103,7 +106,10 @@ class CarLandingScreen(
             handler.post { detach() }
         }
 
-        override fun onVisibleAreaChanged(visibleArea: Rect) {}
+        override fun onVisibleAreaChanged(visibleArea: Rect) {
+            this@CarLandingScreen.visibleArea.set(visibleArea)
+            Log.i(TAG, "visible area $visibleArea (surface ${viewW}x$viewH)")
+        }
         override fun onClick(x: Float, y: Float) { tap(x, y) }
         override fun onScroll(dx: Float, dy: Float) {}
         override fun onFling(dx: Float, dy: Float) {}
@@ -206,6 +212,13 @@ class CarLandingScreen(
         val frame = root ?: return@post
         val px = if (viewW > 0) x * frame.width / viewW else x
         val py = if (viewH > 0) y * frame.height / viewH else y
+        // Instrumentation for the "touches land on the wrong tile" report: the host's raw
+        // pixel space, the surface we were given, the view we actually drew into, and the
+        // tile rects, so the offset can be read off instead of guessed.
+        Log.i(TAG, "tap raw=($x,$y) surface=${viewW}x$viewH frame=${frame.width}x${frame.height} " +
+            "visible=${visibleArea.toShortString()} -> dispatched=($px,$py)")
+        Log.i(TAG, "tiles: " + tileRects(frame).joinToString { "${it.first}=${it.second.toShortString()}" })
+        Log.i(TAG, "tap lands on: " + (tileRects(frame).firstOrNull { it.second.contains(px.toInt(), py.toInt()) }?.first ?: "nothing"))
         val down = SystemClock.uptimeMillis()
         val d = MotionEvent.obtain(down, down, MotionEvent.ACTION_DOWN, px, py, 0)
         frame.dispatchTouchEvent(d); d.recycle()
@@ -213,6 +226,29 @@ class CarLandingScreen(
         val u = MotionEvent.obtain(down, up, MotionEvent.ACTION_UP, px, py, 0)
         frame.dispatchTouchEvent(u); u.recycle()
     } }
+
+    /** Every clickable tile in the page with its on-page bounds (diagnostics only). */
+    private fun tileRects(frame: View): List<Pair<String, Rect>> {
+        val out = ArrayList<Pair<String, Rect>>()
+        fun walk(v: View) {
+            if (v.isClickable && v !== frame) {
+                val label = v.contentDescription?.toString()?.takeIf { it.isNotBlank() }
+                    ?: (v as? ViewGroup)?.let { g ->
+                        (0 until g.childCount).firstNotNullOfOrNull { i ->
+                            (g.getChildAt(i) as? android.widget.TextView)?.text?.toString()
+                        }
+                    }
+                if (label != null) {
+                    val r = Rect()
+                    v.getHitRect(r)
+                    out.add(label to r)
+                }
+            }
+            if (v is ViewGroup) for (i in 0 until v.childCount) walk(v.getChildAt(i))
+        }
+        walk(frame)
+        return out
+    }
 
     private fun dp(v: Int): Int = (v * ctx.resources.displayMetrics.density).toInt()
 
