@@ -119,7 +119,7 @@ class CarMovieListScreen(
 
     override fun onGetTemplate(): Template {
         val list = ItemList.Builder()
-        movies.take(MAX_ROWS).forEach { e ->
+        movies.sortedBy { sortKey(it.name) }.take(MAX_ROWS).forEach { e ->
             list.addItem(Row.Builder()
                 .setTitle(e.name)
                 .apply { e.group.ifBlank { null }?.let { addText(it) } }
@@ -208,7 +208,7 @@ class CarSeriesListScreen(
 
     override fun onGetTemplate(): Template {
         val list = ItemList.Builder()
-        shows.take(MAX_ROWS).forEach { e ->
+        shows.sortedBy { sortKey(it.name) }.take(MAX_ROWS).forEach { e ->
             list.addItem(Row.Builder()
                 .setTitle(e.name)
                 .setOnClickListener { pushEpisodes(e) }
@@ -254,10 +254,15 @@ class CarPosterGridScreen(
     private var refreshQueued = false
     private val handler = Handler(Looper.getMainLooper())
 
-    private val from = (page * PAGE_SIZE).coerceIn(0, entries.size)
-    private val to = (from + PAGE_SIZE).coerceAtMost(entries.size)
-    private val pageItems = entries.subList(from, to)
-    private val pageCount = ((entries.size + PAGE_SIZE - 1) / PAGE_SIZE).coerceAtLeast(1)
+    // Panels return VOD/series in whatever order they like (usually by id), so a category
+    // reads as jumbled — 'TV | US Series' had 88 out-of-order titles. Alphabetical is the
+    // only order a driver can scan.
+    private val ordered = entries.sortedBy { sortKey(it.name) }
+
+    private val from = (page * PAGE_SIZE).coerceIn(0, ordered.size)
+    private val to = (from + PAGE_SIZE).coerceAtMost(ordered.size)
+    private val pageItems = ordered.subList(from, to)
+    private val pageCount = ((ordered.size + PAGE_SIZE - 1) / PAGE_SIZE).coerceAtLeast(1)
 
     override fun onGetTemplate(): Template {
         queueMissing(pageItems)
@@ -288,7 +293,7 @@ class CarPosterGridScreen(
         // Paging as tiles: the host only renders one page's worth, so a 6,000-title category
         // needs its own next/previous targets inside the grid.
         if (page > 0) list.addItem(navTile("\u2039 Previous", PageNav.PREV))
-        if (to < entries.size) list.addItem(navTile("Next \u203A", PageNav.NEXT))
+        if (to < ordered.size) list.addItem(navTile("Next \u203A", PageNav.NEXT))
 
         Log.d(TAG, "grid '$title' page ${page + 1}/$pageCount: ${pageItems.size} items, " +
             "${pageItems.count { CarPosterCache.get(it.logo) != null }} cached, " +
@@ -314,7 +319,7 @@ class CarPosterGridScreen(
             .setImage(CarIcon.Builder(IconCompat.createWithBitmap(bmp)).build(), GridItem.IMAGE_TYPE_LARGE)
             .setOnClickListener {
                 screenManager.push(
-                    CarPosterGridScreen(ctx, title, entries, target, onPick)
+                    CarPosterGridScreen(ctx, title, ordered, target, onPick)
                 )
             }
             .build()
@@ -674,5 +679,18 @@ private fun searchIcon(): CarIcon {
 private const val MAX_ROWS = 60
 
 /** Grid tiles are heavier than rows; the host paginates anyway. */
+/**
+ * Sort key for titles: case-insensitive, with a leading article dropped so "The Addams
+ * Family" files under A (the panels themselves sort that way, which is why raw-name sorting
+ * looked wrong next to the phone app).
+ */
+private fun sortKey(name: String): String {
+    val t = name.trim().lowercase()
+    for (article in arrayOf("the ", "an ", "a ")) {
+        if (t.startsWith(article)) return t.removePrefix(article)
+    }
+    return t
+}
+
 /** Posters per car page; the host draws one page at a time. */
 private const val PAGE_SIZE = 24
