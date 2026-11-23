@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Rogue Legacy</string>
+    <string name="car_service_label">Rogue Legacy in car</string>
+    <string name="car_fs_label">Rogue Fullscreen</string>
+</resources>

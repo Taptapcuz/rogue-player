@@ -1006,7 +1006,9 @@ class MainActivity : AppCompatActivity() {
         if (tab == Tab.HOME) return
         val pl = app.repository.activePlaylist
         if (pl == null) {
-            adapter.submitList(emptyList())
+            // No active source: the channel adapter may never have been built
+            // (e.g. deleted from the Sources screen), so guard the lateinit.
+            if (this::adapter.isInitialized) adapter.submitList(emptyList())
             tvPlaceholder.visibility = View.VISIBLE
             tvPlaceholder.text = "No playlist yet.\nOpen Settings → Playlists to add an M3U link or Xtream login."
             return
@@ -1674,7 +1676,7 @@ class MainActivity : AppCompatActivity() {
                 if (active) return@setOnClickListener
                 app.repository.setActive(pl.name)
                 selectedGroup = null
-                toast("Active: ${pl.name}")
+                toast("Active: " + (pl.label ?: com.rogueplayer.data.BakedSource.displayName(pl.name)))
                 renderContent()
                 reload()
             }
@@ -1685,7 +1687,7 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER_VERTICAL
         }
         titleRow.addView(TextView(this).apply {
-            text = pl.name
+            text = pl.label ?: com.rogueplayer.data.BakedSource.displayName(pl.name)
             textSize = 15f
             setTypeface(null, android.graphics.Typeface.BOLD)
             setTextColor(Palette.TEXT)
@@ -1852,24 +1854,41 @@ class MainActivity : AppCompatActivity() {
         val nameEdit = fields.findViewById<EditText>(R.id.edit_name)
         val tabM3u = fields.findViewById<TextView>(R.id.tab_m3u)
         val tabXtream = fields.findViewById<TextView>(R.id.tab_xtream)
-
-        var isXtream = pl.kind == PlaylistKind.XTREAM
-        fun syncTabs() {
-            urlEdit.visibility = if (isXtream) View.GONE else View.VISIBLE
-            val xVis = if (isXtream) View.VISIBLE else View.GONE
-            hostEdit.visibility = xVis; userEdit.visibility = xVis; passEdit.visibility = xVis
-            tabM3u.setBackgroundColor(if (!isXtream) Palette.CARD_HI else Palette.CARD)
-            tabM3u.setTextColor(if (!isXtream) Palette.TEXT else Palette.MUTED)
-            tabXtream.setBackgroundColor(if (isXtream) Palette.CARD_HI else Palette.CARD)
-            tabXtream.setTextColor(if (isXtream) Palette.TEXT else Palette.MUTED)
+        // Same three modes as the add dialog; a source that came from the baked
+        // panel opens on Rogue TV, where the address is not shown at all.
+        val tabRogue = fields.findViewById<TextView>(R.id.tab_roguetv)
+        val baked = com.rogueplayer.data.BakedSource.enabled &&
+            pl.kind == PlaylistKind.XTREAM &&
+            pl.url.startsWith(com.rogueplayer.data.BakedSource.base(), ignoreCase = true)
+        tabRogue.visibility = if (com.rogueplayer.data.BakedSource.enabled) View.VISIBLE else View.GONE
+        var mode = when {
+            baked -> 2
+            pl.kind == PlaylistKind.XTREAM -> 1
+            else -> 0
         }
-        tabM3u.setOnClickListener { isXtream = false; syncTabs() }
-        tabXtream.setOnClickListener { isXtream = true; syncTabs() }
+        fun paint(t: TextView, on: Boolean) {
+            t.setBackgroundColor(if (on) Palette.CARD_HI else Palette.CARD)
+            t.setTextColor(if (on) Palette.TEXT else Palette.MUTED)
+        }
+        fun syncTabs() {
+            urlEdit.visibility = if (mode == 0) View.VISIBLE else View.GONE
+            hostEdit.visibility = if (mode == 1) View.VISIBLE else View.GONE
+            val creds = if (mode == 0) View.GONE else View.VISIBLE
+            userEdit.visibility = creds; passEdit.visibility = creds
+            paint(tabM3u, mode == 0); paint(tabXtream, mode == 1); paint(tabRogue, mode == 2)
+        }
+        tabM3u.setOnClickListener { mode = 0; syncTabs() }
+        tabXtream.setOnClickListener { mode = 1; syncTabs() }
+        tabRogue.setOnClickListener { mode = 2; syncTabs() }
 
-        nameEdit.setText(pl.name)
+        nameEdit.setText(pl.label ?: com.rogueplayer.data.BakedSource.displayName(pl.name))
         // Stored Xtream sources keep the full player_api URL; the field wants the host.
         hostEdit.setText(
-            if (pl.kind == PlaylistKind.XTREAM) pl.url.substringBefore("/player_api.php") else ""
+            when {
+                baked -> com.rogueplayer.data.BakedSource.base()
+                pl.kind == PlaylistKind.XTREAM -> pl.url.substringBefore("/player_api.php")
+                else -> ""
+            }
         )
         urlEdit.setText(if (pl.kind == PlaylistKind.M3U) pl.url else "")
         userEdit.setText(pl.user.orEmpty())
@@ -1884,8 +1903,11 @@ class MainActivity : AppCompatActivity() {
             .show()
             .also { dialog ->
                 dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                    val target = if (isXtream) hostEdit.text.toString().trim()
-                    else urlEdit.text.toString().trim()
+                    val target = when (mode) {
+                        2 -> com.rogueplayer.data.BakedSource.base()
+                        1 -> hostEdit.text.toString().trim()
+                        else -> urlEdit.text.toString().trim()
+                    }
                     if (target.isBlank()) {
                         toast("Enter the host or URL")
                         return@setOnClickListener
@@ -1893,7 +1915,7 @@ class MainActivity : AppCompatActivity() {
                     scope.launch {
                         val result = runCatching {
                             PlaylistParser.load(
-                                if (isXtream) PlaylistKind.XTREAM else PlaylistKind.M3U,
+                                if (mode != 0) PlaylistKind.XTREAM else PlaylistKind.M3U,
                                 target,
                                 userEdit.text.toString().trim().ifBlank { null },
                                 passEdit.text.toString().trim().ifBlank { null },
@@ -1904,6 +1926,7 @@ class MainActivity : AppCompatActivity() {
                                 toast("Save failed — provider returned no channels")
                                 return@onSuccess
                             }
+                            app.repository.setLabel(pl.name, nameEdit.text.toString())
                             app.repository.replaceContents(pl.name, fresh)
                             renderContent()
                             reload()
@@ -1950,19 +1973,32 @@ class MainActivity : AppCompatActivity() {
         val nameEdit = fields.findViewById<EditText>(R.id.edit_name)
         val tabM3u = fields.findViewById<TextView>(R.id.tab_m3u)
         val tabXtream = fields.findViewById<TextView>(R.id.tab_xtream)
+        val tabRogue = fields.findViewById<TextView>(R.id.tab_roguetv)
 
-        var isXtream = false
-        fun refresh() {
-            urlEdit.visibility = if (isXtream) View.GONE else View.VISIBLE
-            val xVis = if (isXtream) View.VISIBLE else View.GONE
-            hostEdit.visibility = xVis; userEdit.visibility = xVis; passEdit.visibility = xVis
-            tabM3u.setBackgroundColor(if (!isXtream) Palette.CARD_HI else Palette.CARD)
-            tabM3u.setTextColor(if (!isXtream) Palette.TEXT else Palette.MUTED)
-            tabXtream.setBackgroundColor(if (isXtream) Palette.CARD_HI else Palette.CARD)
-            tabXtream.setTextColor(if (isXtream) Palette.TEXT else Palette.MUTED)
+        // Three ways in: M3U link, your own Xtream panel, or Rogue TV — the
+        // baked panel, where only credentials are typed and the address is never
+        // shown. MODE_* stays local to the dialog.
+        val baked = com.rogueplayer.data.BakedSource.enabled
+        tabRogue.visibility = if (baked) View.VISIBLE else View.GONE
+        if (baked) nameEdit.setText(com.rogueplayer.data.BakedSource.LABEL)
+
+        var mode = if (baked) 2 else 1
+        fun paint(t: TextView, on: Boolean) {
+            t.setBackgroundColor(if (on) Palette.CARD_HI else Palette.CARD)
+            t.setTextColor(if (on) Palette.TEXT else Palette.MUTED)
         }
-        tabM3u.setOnClickListener { isXtream = false; refresh() }
-        tabXtream.setOnClickListener { isXtream = true; refresh() }
+        fun refresh() {
+            val m3u = mode == 0
+            urlEdit.visibility = if (m3u) View.VISIBLE else View.GONE
+            // Server field only for a panel the user supplies; Rogue TV hides it.
+            hostEdit.visibility = if (mode == 1) View.VISIBLE else View.GONE
+            val creds = if (mode == 0) View.GONE else View.VISIBLE
+            userEdit.visibility = creds; passEdit.visibility = creds
+            paint(tabM3u, mode == 0); paint(tabXtream, mode == 1); paint(tabRogue, mode == 2)
+        }
+        tabM3u.setOnClickListener { mode = 0; refresh() }
+        tabXtream.setOnClickListener { mode = 1; refresh() }
+        tabRogue.setOnClickListener { mode = 2; refresh() }
         refresh()
 
         AlertDialog.Builder(this)
@@ -1976,9 +2012,11 @@ class MainActivity : AppCompatActivity() {
                     scope.launch {
                         try {
                             val name = nameEdit.text.toString().trim()
-                            val src = if (isXtream) {
+                            val host = if (mode == 2) com.rogueplayer.data.BakedSource.base()
+                                       else hostEdit.text.toString().trim()
+                            val src = if (mode != 0) {
                                 PlaylistParser.load(PlaylistKind.XTREAM,
-                                    hostEdit.text.toString().trim(),
+                                    host,
                                     userEdit.text.toString().trim(),
                                     passEdit.text.toString().trim())
                             } else {

@@ -71,6 +71,14 @@ class PlaylistRepository(context: Context) {
         epgData.clear()
     }
 
+    /** Rename what the UI calls a source. [name] (the storage key) is untouched. */
+    fun setLabel(name: String, label: String?) {
+        val clean = label?.trim()?.takeIf { it.isNotBlank() }
+        val updated = _playlists.value.map { if (it.name == name) it.copy(label = clean) else it }
+        _playlists.value = updated
+        persist(updated)
+    }
+
     fun setActive(name: String) {
         val updated = _playlists.value.map { it.copy(active = it.name == name) }
         _playlists.value = updated
@@ -324,6 +332,7 @@ class PlaylistRepository(context: Context) {
             val json = JSONObject().apply {
                 put("name", pl.name)
                 put("kind", pl.kind.name)
+                pl.label?.let { put("label", it) }
                 put("url", pl.url)
                 put("user", pl.user ?: "")
                 put("pass", pl.pass ?: "")
@@ -379,6 +388,7 @@ class PlaylistRepository(context: Context) {
                 out.add(Playlist(
                     name = o.getString("name"),
                     kind = PlaylistKind.valueOf(o.optString("kind", "M3U")),
+                    label = o.optString("label").takeIf { it.isNotBlank() && it != "null" },
                     url = o.getString("url"),
                     user = o.optString("user").ifBlank { null },
                     pass = o.optString("pass").ifBlank { null },

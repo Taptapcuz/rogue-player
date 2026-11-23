@@ -78,6 +78,8 @@ class ProjectionSession : Session() {
                         CarShowScreen(carContext, play, openPlayer))
                     CarLandingTile.YOUTUBE -> screen.screenManager.push(
                         CarWebScreen(carContext, "https://m.youtube.com"))
+                    CarLandingTile.SEARCH -> screen.screenManager.push(
+                        CarWebScreen(carContext, "https://www.google.com"))
                 }
             },
             onWeb = { it.screenManager.push(CarWebScreen(carContext, "https://www.google.com")) },

@@ -34,8 +34,18 @@
             android:layout_height="40dp"
             android:layout_weight="1"
             android:gravity="center"
-            android:text="Xtream login"
+            android:text="Xtream"
             android:textSize="13sp" />
+
+        <TextView
+            android:id="@+id/tab_roguetv"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:text="Rogue TV"
+            android:textSize="13sp"
+            android:visibility="gone" />
     </LinearLayout>
 
     <EditText

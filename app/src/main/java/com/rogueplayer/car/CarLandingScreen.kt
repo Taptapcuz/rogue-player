@@ -44,6 +44,9 @@ enum class CarLandingTile(val label: String, val iconRes: Int) {
     MOVIES("Movies", R.drawable.ic_nav_movies),
     SHOWS("TV Shows", R.drawable.ic_nav_tv),
     YOUTUBE("YouTube", R.drawable.ic_nav_youtube),
+    /** Web search: rendered in the MIDDLE of the grid, because the bottom of the
+     *  landing is the first thing a short landscape head unit clips. */
+    SEARCH("Search", R.drawable.ic_nav_search),
 }
 
 /**
@@ -352,26 +355,39 @@ class CarLandingScreen(
                 .apply { topMargin = dp(4) })
 
         val grid = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(14), 0, 0) }
-        CarLandingTile.entries.chunked(2).forEachIndexed { rowIdx, row ->
+        // Search is a tile in the MIDDLE of the grid, not a pill under it: the
+        // bottom of a centred column is what a short landscape head unit clips,
+        // which is how the web-search entry went missing in a real car while it
+        // still showed on the DHU.
+        val base = CarLandingTile.entries.filter { it != CarLandingTile.SEARCH }.chunked(2)
+        val rows = buildList {
+            if (base.isNotEmpty()) add(base[0])
+            add(listOf(CarLandingTile.SEARCH))
+            addAll(base.drop(1))
+        }
+        rows.forEachIndexed { rowIdx, row ->
             val rowLay = LinearLayout(c).apply {
                 orientation = LinearLayout.HORIZONTAL
                 setPadding(0, dp(6), 0, dp(6))
             }
-            row.forEach { t ->
-                rowLay.addView(
-                    tile(c, t, rowIdx),
-                    LinearLayout.LayoutParams(0, dp(116), 1f).apply {
-                        marginStart = dp(6); marginEnd = dp(6)
-                    },
-                )
+            if (row.size == 1) {
+                // One tile, half width, centred between the two tile rows.
+                rowLay.addView(View(c), LinearLayout.LayoutParams(0, 1, 0.5f))
+                rowLay.addView(tile(c, row[0], rowIdx), LinearLayout.LayoutParams(0, dp(116), 1f))
+                rowLay.addView(View(c), LinearLayout.LayoutParams(0, 1, 0.5f))
+            } else {
+                row.forEach { t ->
+                    rowLay.addView(
+                        tile(c, t, rowIdx),
+                        LinearLayout.LayoutParams(0, dp(116), 1f).apply {
+                            marginStart = dp(6); marginEnd = dp(6)
+                        },
+                    )
+                }
             }
             grid.addView(rowLay)
         }
         col.addView(grid)
-
-        // Transparent web-search pill (Google in the car, no keyboard needed on load).
-        col.addView(webPill(c), LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(74) })
 
         return host
     }

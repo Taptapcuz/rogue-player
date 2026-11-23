@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Legacy (CarStream-style) edition manifest overrides.
+     The modern Car App Library service is REMOVED here; the legacy projection
+     service is added instead. AA therefore sees a projection/media app, not a
+     navigation app — no boot hijack, and the hosted car activity can truly exit. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <application>
+
+        <!-- The modern-library service is REMOVED in this edition.
+             It used to stay as a second drawer entry ("Rogue Fullscreen"), but
+             it declares the NAVIGATION category, so AA resumed it on every
+             connect: that is what booted first and cut the hosted activity's
+             boot screen short. With it gone the package is projection-only —
+             one entry, no boot resume, no relaunch on exit.
+             Revert = git checkout HEAD on this manifest file. -->
+        <service
+            android:name="com.rogueplayer.car.RogueCarService"
+            tools:node="remove" />
+
+        <!-- Legacy projection service, exactly the CarStream/Fermata shape.
+             The hosted CarActivity needs NO manifest entry — gearhead binds this
+             service and the SDK hosts the activity itself. -->
+        <service
+            android:name="com.rogueplayer.legacycar.LegacyCarService"
+            android:exported="true"
+            android:label="@string/car_service_label">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="com.google.android.gms.car.category.CATEGORY_PROJECTION" />
+                <category android:name="com.google.android.gms.car.category.CATEGORY_PROJECTION_OEM" />
+            </intent-filter>
+        </service>
+
+    </application>
+</manifest>

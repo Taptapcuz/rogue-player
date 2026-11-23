@@ -41,6 +41,16 @@ android {
             applicationId = "com.rogueplayer.locked"
             versionName = "1.0-locked"
         }
+        // CarStream-style test edition: the car side runs on the LEGACY projection
+        // auto-sdk (real hosted activity, media/projection categories — NOT the
+        // modern Car App Library's NAVIGATION category). Head-to-head vs basic:
+        // AA should boot to the launcher/Maps instead of auto-opening Rogue, and
+        // back/exit should genuinely leave the app. Phone UI is shared src/main.
+        create("legacy") {
+            dimension = "edition"
+            applicationId = "com.rogueplayer.legacy"
+            versionName = "1.0-legacy"
+        }
     }
 
     compileOptions {
@@ -90,6 +100,11 @@ dependencies {
 
     // Android Auto / Android for Cars (Car App Library)
     implementation("androidx.car.app:app:1.7.0")
+
+    // LEGACY flavor only: the unofficial projection auto-sdk (CarStream's route).
+    // Local AAR (JitPack com.github.martoreto:aauto-sdk:v4.5, cached); jetifier
+    // rewrites its android.support.* references to androidx at build time.
+    "legacyImplementation"(files("libs/aauto-sdk-v4.5.aar"))
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 

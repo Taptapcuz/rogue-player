@@ -85,6 +85,10 @@ data class MediaDetail(
 /** A playlist source the user added. */
 data class Playlist(
     val name: String,
+    /** What the UI shows. Kept apart from [name] on purpose: [name] is the storage
+     *  key (prefs, hidden groups, guide memo), so renaming the label must not
+     *  disturb it. Null = fall back to name. */
+    val label: String? = null,
     val kind: PlaylistKind,
     val url: String,
     val user: String? = null,

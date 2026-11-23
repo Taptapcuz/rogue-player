@@ -10,3 +10,6 @@ captures/
 *.apk
 *.aab
 !gradle-wrapper.jar
+
+# Unofficial projection SDK (aauto-sdk) — vendored locally, not redistributable.
+app/libs/*.aar

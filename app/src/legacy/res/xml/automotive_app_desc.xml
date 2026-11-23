@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Legacy edition: media + projection, like CarStream/Fermata. Deliberately NOT
+     "template"/"navigation" — that is the modern-library route that makes AA
+     treat Rogue as the nav app (boot hijack + relaunch-on-exit). -->
+<automotiveApp xmlns:tools="http://schemas.android.com/tools">
+    <uses name="media" />
+    <uses name="service" tools:ignore="InvalidUsesTagAttribute" />
+    <uses name="projection" tools:ignore="InvalidUsesTagAttribute" />
+    <!-- Required for the second (modern-library) service, "Rogue Fullscreen". -->
+    <uses name="template" />
+</automotiveApp>
