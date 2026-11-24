@@ -137,18 +137,37 @@ class VlcEngine(context: Context) {
 
     fun pause() = runCatching { player.pause() }.let { }
 
-    fun stop() = runCatching { player.stop() }.let { }
+    /**
+     * Never call libVLC's stop on the UI thread. `libvlc_media_player_stop` joins the
+     * decoder thread (`vlc_join` → `vlc_cond_wait`) and that wait has been seen to
+     * outlast Android's 5s input budget on this SoC — the resulting ANR took the whole
+     * process with it, including the car Activity sharing that process (frozen car UI).
+     */
+    fun stop() {
+        val p = player
+        VLC_STOPPER.execute { runCatching { p.stop() } }
+    }
 
     fun release() {
-        runCatching {
-            player.stop()
-            runCatching { player.detachViews() }
-            player.release()
-            libVlc.release()
+        val p = player
+        val v = libVlc
+        // Serial worker, so a stop queued just before this still lands first.
+        VLC_STOPPER.execute {
+            runCatching {
+                p.stop()
+                runCatching { p.detachViews() }
+                p.release()
+                v.release()
+            }
         }
     }
 
     private companion object {
         const val TAG = "VlcEngine"
+
+        private val VLC_STOPPER: java.util.concurrent.ExecutorService =
+            java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+                Thread(r, "vlc-stop").apply { isDaemon = true }
+            }
     }
 }
