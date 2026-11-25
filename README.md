@@ -110,3 +110,12 @@ distribute any channels, playlists, streams, or copyrighted media. You must add
 your own source and have the legal right to access it. Android Auto video/IPTV
 is not officially supported by Google — running this in a car requires
 sideloading and is done at your own risk, and only when parked.
+
+## License
+
+GPL-3.0-or-later. See [LICENSE](LICENSE).
+
+In plain terms: use it, change it, ship it — but if you distribute a modified
+version, its source has to be available under the same license. The app itself
+ships no content; what you play through it is your responsibility and your
+subscription.
