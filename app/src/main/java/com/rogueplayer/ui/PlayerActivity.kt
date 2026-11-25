@@ -173,7 +173,10 @@ class PlayerActivity : AppCompatActivity() {
         // VLC is phone-only: the car path needs ExoPlayer's media-session/audio-attribute
         // wiring or Android Auto plays picture with no sound.
         val engine = UiSettings.engine(this)
-        if (engine == UiSettings.ENGINE_VLC) {
+        // A local video from the Folders screen is a content:// URI; libVLC needs a file
+        // descriptor for those, so the phone's own videos always take the ExoPlayer path.
+        val local = lastUrl.startsWith("content://") || lastUrl.startsWith("file://")
+        if (engine == UiSettings.ENGINE_VLC && !local) {
             playerView?.visibility = View.GONE
             // Silence the service engine immediately: it was started by the list screen and
             // would play underneath VLC until the binding lands.

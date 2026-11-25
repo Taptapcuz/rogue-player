@@ -225,14 +225,17 @@ class SettingsActivity : AppCompatActivity() {
         // -------------------------------- APP DATA -------------------------------
         section("App data")
         row(
-            title = "Clear app data",
-            sub = "Remove cached TV guide & poster images",
-            icon = "✕",
+            title = "Clear cache",
+            sub = "All cached data: guide, posters, temp — your data stays",
+            icon = "⌫",
             onClick = {
                 AlertDialog.Builder(this)
-                    .setTitle("Clear app data?")
-                    .setMessage("This removes cached guides and poster images. Your playlists and favorites are kept.")
-                    .setPositiveButton("Clear") { _, _ -> clearAppData() }
+                    .setTitle("Clear cache?")
+                    .setMessage(
+                        "Clears all cached data: TV guide, poster images and temp files. " +
+                            "Your playlists, favorites, sign-ins and settings are kept."
+                    )
+                    .setPositiveButton("Clear") { _, _ -> clearCache() }
                     .setNegativeButton("Cancel", null)
                     .show()
             })
@@ -361,13 +364,31 @@ class SettingsActivity : AppCompatActivity() {
         render()
     }
 
-    private fun clearAppData() {
-        runCatching { File(filesDir, "epg").deleteRecursively() }
+    /**
+     * ALL cached data, nothing of the user's: guides, poster images, HLS fragments, browser
+     * cache, temp files. Playlists, favorites and settings are kept — everything removed here
+     * is rebuilt from the provider or regenerated on demand.
+     */
+    private fun clearCache() {
+        val dataDir = applicationInfo.dataDir
+        // Caches only. app_webview is deliberately NOT here: it holds the browser's sign-ins
+        // (YouTube/Google), which are the user's data, not a cache.
+        listOf(
+            File(filesDir, "epg"),                 // downloaded TV guide
+            File(dataDir, "app_tmp"),
+            cacheDir,                              // posters, HLS fragments, temp
+            codeCacheDir,
+            externalCacheDir,
+        ).forEach { dir -> runCatching { dir?.deleteRecursively() } }
+
+        // Guide + image caches held in prefs (phone and car).
         runCatching {
-            val coil = applicationContext.getSharedPreferences("coil_preferences", 0)
-            coil.edit().clear().apply()
+            getSharedPreferences("mytv_guide", MODE_PRIVATE).edit().clear().apply()
+            getSharedPreferences("rogue_car_guide", MODE_PRIVATE).edit().clear().apply()
+            getSharedPreferences("coil_preferences", 0).edit().clear().apply()
         }
-        android.widget.Toast.makeText(this, "App data cleared", android.widget.Toast.LENGTH_SHORT).show()
+
+        android.widget.Toast.makeText(this, "All cached data cleared", android.widget.Toast.LENGTH_SHORT).show()
     }
 
     private fun rounded(fill: Int, radius: Int): GradientDrawable =

@@ -1,6 +1,39 @@
+import java.util.Properties
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+}
+
+// ---------------------------------------------------------------- which builds ship what --
+//
+// TWO KINDS OF BUILD, one codebase:
+//
+//   public    (the free GitHub APK)  — login offers M3U link + Xtream only.
+//   customer  (-PwithPanel)          — the same app plus a "Rogue TV" tab that logs into the
+//                                      panel in baked.properties, so a customer only types
+//                                      their username/password.
+//
+// baked.properties is gitignored, so a clean clone can only produce the public build. The
+// switch is opt-in ON PURPOSE: this machine always has that file, so a default-on panel
+// would quietly put the portal inside every APK built here — including a public one.
+//
+//   gradlew assembleLegacyRelease                 → public   (2 login types)
+//   gradlew assembleLegacyRelease -PwithPanel      → customer (3 login types)
+//
+val withPanel = providers.gradleProperty("withPanel").isPresent
+val bakedPanel = Properties().apply {
+    val f = rootProject.file("baked.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+fun baked(key: String): String = if (withPanel) bakedPanel.getProperty(key).orEmpty() else ""
+
+// Release signing comes from keystore.properties (also gitignored): storeFile, storePassword,
+// keyAlias, keyPassword. Kept out of the repo on purpose — the key is the app's identity, and
+// anyone who has it can ship an update your customers will accept. Absent file = unsigned
+// release, which is what a clone gets and what CI would use with its own secrets.
+val keystoreProps = Properties().apply {
+    val f = rootProject.file("keystore.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
 }
 
 android {
@@ -15,12 +48,27 @@ android {
         versionName = "1.0"
         vectorDrawables { useSupportLibrary = true }
         ndk { abiFilters += listOf("arm64-v8a") }
+        buildConfigField("String", "BAKED_HOST", "\"" + baked("host") + "\"")
+        buildConfigField("String", "BAKED_USER", "\"" + baked("user") + "\"")
+        buildConfigField("String", "BAKED_PASS", "\"" + baked("pass") + "\"")
+    }
+
+    signingConfigs {
+        create("release") {
+            if (keystoreProps.isNotEmpty()) {
+                storeFile = rootProject.file(keystoreProps.getProperty("storeFile"))
+                storePassword = keystoreProps.getProperty("storePassword")
+                keyAlias = keystoreProps.getProperty("keyAlias")
+                keyPassword = keystoreProps.getProperty("keyPassword")
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            if (keystoreProps.isNotEmpty()) signingConfig = signingConfigs.getByName("release")
         }
     }
 
@@ -63,6 +111,7 @@ android {
 
     buildFeatures {
         compose = false
+        buildConfig = true
     }
 
     packaging {

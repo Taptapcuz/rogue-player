@@ -468,7 +468,12 @@ object PlaylistParser {
     }
 
     private fun buildStreamUrl(base: String, user: String, pass: String, streamId: String): String {
-        return "$base/live/$user/$pass/$streamId.m3u8"
+        // `base` is the stored Xtream source, which keeps the whole
+        // `.../player_api.php?username=…&password=…` URL. Streams hang off the host root, so
+        // appending to the raw base produced `…/player_api.php/live/…` — a 404 the player
+        // reported as "Your input can't be opened".
+        val host = base.substringBefore("/player_api.php").trimEnd('/')
+        return "$host/live/$user/$pass/$streamId.m3u8"
     }
 
     /**

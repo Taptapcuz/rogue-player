@@ -1,53 +1,50 @@
 package com.rogueplayer.data
 
+import com.rogueplayer.BuildConfig
+
 /**
- * The portal this build ships with, so a fresh install has content without
- * anyone typing a URL, username and password.
+ * The portal this *build* ships with, so a fresh install has content without anyone typing
+ * a URL, username and password.
  *
- * The three strings are XOR-masked byte literals and are only assembled at
- * runtime, so `strings app.apk` / a resource dump will not surface them. That is
- * obfuscation, not security: the key ships in the same APK, so anyone who dumps
- * this class's memory or reverses the loop can recover them. Treat a build with
- * this file baked in as private — do not publish the APK.
+ * The three values are **not in the source tree**: `app/build.gradle.kts` reads them from
+ * `baked.properties` at the repo root, which is gitignored. No file = no baked portal, and
+ * a build made from a clean checkout simply starts empty with the add-playlist form — which
+ * is what any published APK must do.
  *
- * Behaviour: [com.rogueplayer.MyApplication] adds this source on start ONLY when
- * no playlist is stored yet, so an install that already has sources is never
- * touched and the user can still add or remove their own.
+ * That is a distribution rule, not security: anything the app can read at runtime can be
+ * recovered from the APK. Treat a build with this baked in as a private build — do not hand
+ * it out and do not publish it.
+ *
+ * Behaviour: [com.rogueplayer.MyApplication] adds this source on start ONLY when no playlist
+ * is stored yet, so an install that already has sources is never touched and the user can
+ * still add or remove their own.
  */
 object BakedSource {
 
-    private val KEY = intArrayOf(90, -61, 39, -98, 65, -16, 107, 24)
-
-    private val HOST_MASKED = intArrayOf(61, -85, 72, -19, 53, -126, 2, 124, 63, -19, 95, -25, 59, -54, 89, 44, 111, -11, 22)
-    private val USER_MASKED = intArrayOf(56, -94, 69, -25, 35, -97, 18, 116, 53, -96)
-    private val PASS_MASKED = intArrayOf(106, -10, 19, -87, 121, -61)
+    private val HOST = BuildConfig.BAKED_HOST.trim()
+    private val USER = BuildConfig.BAKED_USER.trim()
+    private val PASS = BuildConfig.BAKED_PASS.trim()
 
     /** True when this build carries a baked portal at all. */
-    val enabled: Boolean get() = HOST_MASKED.isNotEmpty() && USER_MASKED.isNotEmpty()
+    val enabled: Boolean get() = HOST.isNotBlank() && USER.isNotBlank()
 
-    private fun unmask(masked: IntArray): String {
-        val out = ByteArray(masked.size)
-        for (i in masked.indices) {
-            out[i] = (masked[i] xor KEY[i % KEY.size]).toByte()
-        }
-        return String(out, Charsets.UTF_8)
-    }
+    private fun bare(): String =
+        HOST.removePrefix("https://").removePrefix("http://").trimEnd('/')
 
     /** `http://host:port` — what the add-source form calls the server address. */
-    fun base(): String = "http://" + unmask(HOST_MASKED)
+    fun base(): String = "http://" + bare()
 
     /** `http://host:port/player_api.php` — the Xtream API root. */
     fun url(): String = base() + "/player_api.php"
 
-    fun user(): String = unmask(USER_MASKED)
+    fun user(): String = USER
 
-    fun pass(): String = unmask(PASS_MASKED)
+    fun pass(): String = PASS
 
     /** Playlist name = the host, which is what the app derives for Xtream sources. */
-    fun name(): String = unmask(HOST_MASKED)
+    fun name(): String = bare()
 
-    /** What the UI calls this source. Never the host: a baked build shows a brand
-     *  line, so logging in does not display the panel address. */
+    /** What the UI calls this source when the stored name is the host. */
     const val LABEL = "Rogue TV"
 
     fun displayName(stored: String): String =

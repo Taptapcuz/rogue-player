@@ -750,7 +750,7 @@ class MainActivity : AppCompatActivity() {
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(2) })
         col.addView(TextView(this).apply {
-            text = "LIVE · MOVIES · TV SHOWS · GUIDE · PLAYLISTS · YOUTUBE"
+            text = "LIVE · MOVIES · TV SHOWS · GUIDE · FOLDERS · YOUTUBE"
             textSize = 10f
             letterSpacing = 0.12f
             setTextColor(Palette.DIM)
@@ -766,7 +766,9 @@ class MainActivity : AppCompatActivity() {
             LandingTile("TV Guide", R.drawable.ic_nav_guide) {
                 startActivity(Intent(this, GuideActivity::class.java))
             },
-            LandingTile("Playlists", R.drawable.ic_nav_playlists) { goto(Tab.PLAYLISTS) },
+            LandingTile("Folders", R.drawable.ic_nav_videos) {
+                startActivity(Intent(this@MainActivity, FoldersActivity::class.java))
+            },
             LandingTile("YouTube", R.drawable.ic_nav_youtube) {
                 startActivity(BrowserActivity.intent(this))
             },
@@ -1124,18 +1126,22 @@ class MainActivity : AppCompatActivity() {
     private fun reload() {
         // The /Home landing has no list/tvPlaceholder, so there's nothing to build.
         if (tab == Tab.HOME) return
+        // The Playlists manager draws itself; there is no list page to build. This check has
+        // to come BEFORE the "no active source" branch: that branch writes tvPlaceholder,
+        // which only exists once a list page has been built — deleting the last source from
+        // this tab used to throw UninitializedPropertyAccessException.
+        if (tab == Tab.PLAYLISTS) return
         val pl = app.repository.activePlaylist
         if (pl == null) {
             // No active source: the channel adapter may never have been built
             // (e.g. deleted from the Sources screen), so guard the lateinit.
             if (this::adapter.isInitialized) adapter.submitList(emptyList())
-            tvPlaceholder.visibility = View.VISIBLE
-            tvPlaceholder.text = "No playlist yet.\nOpen Settings → Playlists to add an M3U link or Xtream login."
+            if (this::tvPlaceholder.isInitialized) {
+                tvPlaceholder.visibility = View.VISIBLE
+                tvPlaceholder.text = "No playlist yet.\nOpen Settings → Playlists to add an M3U link or Xtream login."
+            }
             return
         }
-
-        // The Playlists manager draws itself; there is no list page to build.
-        if (tab == Tab.PLAYLISTS) return
 
         tvPlaceholder.visibility = View.GONE
 
@@ -2101,7 +2107,7 @@ class MainActivity : AppCompatActivity() {
     private fun confirmDelete(pl: Playlist) {
         AlertDialog.Builder(this)
             .setTitle("Delete playlist")
-            .setMessage("Remove “${pl.name}” from this device? The provider account itself is untouched.")
+            .setMessage("Remove “${pl.label ?: com.rogueplayer.data.BakedSource.displayName(pl.name)}” from this device? The provider account itself is untouched.")
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Delete") { _, _ ->
                 app.repository.remove(pl.name)
@@ -2127,9 +2133,9 @@ class MainActivity : AppCompatActivity() {
         val tabXtream = fields.findViewById<TextView>(R.id.tab_xtream)
         val tabRogue = fields.findViewById<TextView>(R.id.tab_roguetv)
 
-        // Three ways in: M3U link, your own Xtream panel, or Rogue TV — the
-        // baked panel, where only credentials are typed and the address is never
-        // shown. MODE_* stays local to the dialog.
+        // Three ways in: M3U link, your own Xtream panel, or Rogue TV — the baked
+        // panel, where only credentials are typed and the address is never shown.
+        // The tab only exists in a build that carries a baked portal.
         val baked = com.rogueplayer.data.BakedSource.enabled
         tabRogue.visibility = if (baked) View.VISIBLE else View.GONE
         if (baked) nameEdit.setText(com.rogueplayer.data.BakedSource.LABEL)

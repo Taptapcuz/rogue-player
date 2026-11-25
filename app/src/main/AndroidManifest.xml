@@ -245,6 +245,13 @@
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize"
             android:theme="@style/Theme.RoguePlayer" />
 
+        <!-- The phone's own video folders (landing tile); plays content:// URIs. -->
+        <activity
+            android:name=".ui.FoldersActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize"
+            android:theme="@style/Theme.RoguePlayer" />
+
         <!-- TiViMate-style TV guide -->
         <activity
             android:name=".ui.GuideActivity"

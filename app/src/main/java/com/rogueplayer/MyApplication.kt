@@ -34,19 +34,27 @@ class MyApplication : Application() {
     }
 
     /**
-     * Add the baked portal (see [BakedSource]) when the install has no playlist
-     * yet, so nothing has to be typed on a fresh install. Never overwrites or
-     * re-adds: an install with stored sources is left exactly as it is.
+     * Add the baked portal (see [BakedSource]) to a fresh install so it has content without
+     * typing anything.
+     *
+     * Runs at most ONCE per install: a flag is set the first time it looks at the source
+     * list, whether or not it added anything. That is what keeps a deleted source deleted —
+     * seeding must never resurrect a playlist the user removed. Clearing app data resets it.
+     *
+     * Only builds produced with a local `baked.properties` have a portal at all.
      */
     private fun seedBakedSource() {
         if (!BakedSource.enabled) return
+        val seedPrefs = getSharedPreferences("mytv_seed", MODE_PRIVATE)
+        if (seedPrefs.getBoolean(SEED_DONE, false)) return
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             repository.loadState.first { it }
-            // Decode check on every start: a masked literal assembled wrongly
-            // shows up here as garbage, without touching the user's data.
             Log.i("RogueSeed", "baked portal available: " + BakedSource.name() +
                 " (stored sources: " + repository.playlists.value.size + ")")
-            if (repository.playlists.value.isNotEmpty()) return@launch
+            if (repository.playlists.value.isNotEmpty()) {
+                seedPrefs.edit().putBoolean(SEED_DONE, true).apply()
+                return@launch
+            }
             runCatching {
                 PlaylistParser.load(
                     PlaylistKind.XTREAM,
@@ -56,11 +64,18 @@ class MyApplication : Application() {
                 )
             }.onSuccess { fresh ->
                 repository.add(fresh.copy(name = BakedSource.name()))
+                seedPrefs.edit().putBoolean(SEED_DONE, true).apply()
                 Log.i("RogueSeed", "baked portal added: " + BakedSource.name())
             }.onFailure {
+                // Not marked done: a network blip on first launch should be retried next time.
                 Log.w("RogueSeed", "baked portal failed to load", it)
             }
         }
+    }
+
+    private companion object {
+        /** Set once seeding has been considered for this install; never cleared by the app. */
+        const val SEED_DONE = "baked_seeded"
     }
 
     /**

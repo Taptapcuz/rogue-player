@@ -13,3 +13,11 @@ captures/
 
 # Unofficial projection SDK (aauto-sdk) — vendored locally, not redistributable.
 app/libs/*.aar
+
+# Baked panel credentials (build-time only, never committed)
+baked.properties
+
+# Release signing (never committed)
+keystore.properties
+*.jks
+*.keystore
