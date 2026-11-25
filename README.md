@@ -80,6 +80,11 @@ planned. This covers live TV, VOD and series from one subscription, an EPG guide
   untouched. Partial files are kept.
 - **Folders** — the phone's own video library, playable in the app.
 - **Web browsing + YouTube** — an in-app browser, phone and car.
+- **Ad and tracker blocking** — in that browser, on the phone and in the car: ad and tracker
+  requests are refused on-device before they leave (`AdBlock.kt`: doubleclick, googlesyndication,
+  the ad paths on youtube.com), with a small script on top that hides masthead slots and clicks
+  Skip Ad. No proxy, no VPN. It cannot strip an ad muxed into a video stream — and the player
+  itself never shows ads, because your own streams don't carry them.
 - **Android Auto** — a real car UI: six tiles, a guide with a preview rail, scores, and a
   video page with a transport strip. Two backs on the landing stop playback and end the
   process, so nothing keeps a provider connection open.
