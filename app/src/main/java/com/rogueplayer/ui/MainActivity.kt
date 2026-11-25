@@ -356,7 +356,7 @@ class MainActivity : AppCompatActivity() {
         updateBackButton()
     }
 
-    /** Pop one navigation level, or finish the activity if nothing to undo. */
+    /** Pop one navigation level, or ask to exit if there is nothing left to undo. */
     private fun goBack() {
         // The category editor is a sub-screen of the playlists tab, not a tab/filter state.
         if (categoryEditor != null) {
@@ -366,7 +366,27 @@ class MainActivity : AppCompatActivity() {
         }
         val prev = backStack.removeLastOrNull()
         if (prev == null) {
-            finish()
+            // Back leaves whatever tab you are in for the HOME landing first — the landing is
+            // the app's root, so it is the only screen where an exit makes sense. A tab you
+            // started on (last-session restore) is not a reason to exit from there.
+            if (tab != Tab.HOME) {
+                tab = Tab.HOME
+                selectedGroup = null
+                renderContent()
+                renderNav()
+                updateBackButton()
+                return
+            }
+            // On the landing a single Back used to just `finish()`, which leaves the process
+            // (and the player service) alive in the background. Two presses now: the first
+            // shows what will happen, the second actually stops playback and kills the
+            // process, so nothing keeps holding the provider connection.
+            if (exitArmed) {
+                exitArmed = false
+                killApp()
+            } else {
+                armExit()
+            }
             return
         }
         val (prevTab, prevFilter) = prev
@@ -375,6 +395,45 @@ class MainActivity : AppCompatActivity() {
         renderContent()
         renderNav()
         updateBackButton()
+    }
+
+    /**
+     * First Back at the root: say so, and start a short window. A second Back inside it exits;
+     * letting the window lapse disarms it, so an accidental press costs nothing.
+     */
+    private var exitArmed = false
+    private val handler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val exitPrompt = Runnable {
+        exitArmed = false
+        exitToast?.cancel()
+        exitToast = null
+    }
+    private var exitToast: android.widget.Toast? = null
+
+    private fun armExit() {
+        exitArmed = true
+        exitToast?.cancel()
+        exitToast = android.widget.Toast.makeText(
+            this, "Press back again to exit Rogue Player", android.widget.Toast.LENGTH_SHORT
+        ).also { it.show() }
+        handler.removeCallbacks(exitPrompt)
+        handler.postDelayed(exitPrompt, 2500)
+    }
+
+    /**
+     * Real exit: stop the stream first (otherwise the service keeps the provider connection and
+     * the car's media session limps on), leave no activity behind, then end the process.
+     */
+    private fun killApp() {
+        handler.removeCallbacks(exitPrompt)
+        runCatching { stopService(Intent(this, com.rogueplayer.player.PlaybackService::class.java)) }
+        runCatching { finishAffinity() }
+        finishAndRemoveTask()
+        // Give the service stop a moment to run before the process goes, so the provider sees a
+        // clean disconnect instead of a dropped socket.
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            runCatching { android.os.Process.killProcess(android.os.Process.myPid()) }
+        }, 350)
     }
 
     /** Show the back arrow only when there's a navigation to undo. */
