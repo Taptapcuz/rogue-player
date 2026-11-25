@@ -18,6 +18,29 @@ provider, reseller or service. No channels, playlists, streams or credentials sh
 
 ---
 
+## Screenshots
+
+Phone and Android Auto, taken on the current build. Click any one for full size.
+
+### Phone
+
+|   |   |   |
+|---|---|---|
+| <a href="docs/screenshots/phone/01-landing.jpg"><img src="docs/screenshots/phone/01-landing.jpg" width="240" alt="Home landing"></a><br><sub>Home landing</sub> | <a href="docs/screenshots/phone/02-live-categories.jpg"><img src="docs/screenshots/phone/02-live-categories.jpg" width="240" alt="Live TV categories"></a><br><sub>Live TV categories</sub> | <a href="docs/screenshots/phone/03-live-channels.jpg"><img src="docs/screenshots/phone/03-live-channels.jpg" width="240" alt="Channels in a category"></a><br><sub>Channels in a category</sub> |
+| <a href="docs/screenshots/phone/04-guide.jpg"><img src="docs/screenshots/phone/04-guide.jpg" width="240" alt="EPG guide"></a><br><sub>EPG guide</sub> | <a href="docs/screenshots/phone/05-movie-categories.jpg"><img src="docs/screenshots/phone/05-movie-categories.jpg" width="240" alt="Movie categories"></a><br><sub>Movie categories</sub> | <a href="docs/screenshots/phone/06-movies-grid.jpg"><img src="docs/screenshots/phone/06-movies-grid.jpg" width="240" alt="Movie grid"></a><br><sub>Movie grid</sub> |
+| <a href="docs/screenshots/phone/07-movie-detail.jpg"><img src="docs/screenshots/phone/07-movie-detail.jpg" width="240" alt="Movie detail page"></a><br><sub>Movie detail page</sub> | <a href="docs/screenshots/phone/08-show-categories.jpg"><img src="docs/screenshots/phone/08-show-categories.jpg" width="240" alt="Series categories"></a><br><sub>Series categories</sub> | <a href="docs/screenshots/phone/09-folders.jpg"><img src="docs/screenshots/phone/09-folders.jpg" width="240" alt="Device folders"></a><br><sub>Device folders</sub> |
+| <a href="docs/screenshots/phone/10-settings.jpg"><img src="docs/screenshots/phone/10-settings.jpg" width="240" alt="Settings"></a><br><sub>Settings</sub> | <a href="docs/screenshots/phone/11-playlists.jpg"><img src="docs/screenshots/phone/11-playlists.jpg" width="240" alt="Sources & playlists"></a><br><sub>Sources & playlists</sub> | <a href="docs/screenshots/phone/12-add-playlist.jpg"><img src="docs/screenshots/phone/12-add-playlist.jpg" width="240" alt="Add a playlist"></a><br><sub>Add a playlist</sub> |
+| <a href="docs/screenshots/phone/13-sports.jpg"><img src="docs/screenshots/phone/13-sports.jpg" width="240" alt="Sports"></a><br><sub>Sports</sub> | <a href="docs/screenshots/phone/14-player.jpg"><img src="docs/screenshots/phone/14-player.jpg" width="240" alt="Player"></a><br><sub>Player</sub> |  |
+
+### Android Auto
+
+|   |   |
+|---|---|
+| <a href="docs/screenshots/car/01-landing.jpg"><img src="docs/screenshots/car/01-landing.jpg" width="240" alt="Car landing"></a><br><sub>Car landing</sub> | <a href="docs/screenshots/car/02-movie-groups.jpg"><img src="docs/screenshots/car/02-movie-groups.jpg" width="240" alt="Movie categories"></a><br><sub>Movie categories</sub> |
+| <a href="docs/screenshots/car/03-poster-grid.jpg"><img src="docs/screenshots/car/03-poster-grid.jpg" width="240" alt="Poster grid"></a><br><sub>Poster grid</sub> | <a href="docs/screenshots/car/04-movie-detail.jpg"><img src="docs/screenshots/car/04-movie-detail.jpg" width="240" alt="Movie detail"></a><br><sub>Movie detail</sub> |
+| <a href="docs/screenshots/car/05-shows.jpg"><img src="docs/screenshots/car/05-shows.jpg" width="240" alt="Series categories"></a><br><sub>Series categories</sub> | <a href="docs/screenshots/car/06-show-posters.jpg"><img src="docs/screenshots/car/06-show-posters.jpg" width="240" alt="Series posters"></a><br><sub>Series posters</sub> |
+| <a href="docs/screenshots/car/07-series.jpg"><img src="docs/screenshots/car/07-series.jpg" width="240" alt="Episodes"></a><br><sub>Episodes</sub> | <a href="docs/screenshots/car/08-player.jpg"><img src="docs/screenshots/car/08-player.jpg" width="240" alt="Video page"></a><br><sub>Video page</sub> |
+
 ## Why it's built this way
 
 The car is the reason. Most TV-first players (TiviMate, IMPlayer, IBO Player) don't run in
