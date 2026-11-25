@@ -555,7 +555,9 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER_VERTICAL
             marginEnd = dp(2)
         })
-        h.addView(logo("i", 28))
+        // The decorative "i" used to sit here. It had no click listener — it looked like the
+        // settings button and did nothing, which is worse than not being there. Settings opens
+        // from the wordmark.
         return h
     }
 
