@@ -26,12 +26,14 @@ import android.webkit.WebViewClient
 import android.widget.BaseAdapter
 import android.widget.FrameLayout
 import android.widget.GridView
+import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ListView
 import android.widget.ScrollView
 import android.widget.TextView
 import android.support.car.input.CarRestrictedEditText
+import coil.load
 import com.google.android.apps.auto.sdk.CarImeBridge
 import com.google.android.apps.auto.sdk.CarActivity
 import com.rogueplayer.MyApplication
@@ -41,11 +43,14 @@ import com.rogueplayer.data.Entry
 import com.rogueplayer.data.EpgProgram
 import com.rogueplayer.data.Episode
 import com.rogueplayer.data.PlaylistKind
+import com.rogueplayer.data.ScoreGame
+import com.rogueplayer.data.ScoreSource
 import com.rogueplayer.player.PlaybackService
 import com.rogueplayer.ui.EpgGridView
 import com.rogueplayer.ui.Palette
 import com.rogueplayer.ui.PosterCell
 import com.rogueplayer.ui.SplashView
+import com.rogueplayer.ui.TeamBadge
 import com.rogueplayer.ui.UiSettings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -214,6 +219,8 @@ class LegacyCarActivity : CarActivity() {
         // The guide's rail surface dies with its page; stop the pane's clock too.
         guideOpen = false
         handler.removeCallbacks(previewTicker)
+        // The score poller re-arms itself from the scores page build only.
+        handler.removeCallbacks(scoreTicker)
         if (pushCurrent) current?.let { backStack.addLast(it) }
         current = page
         root.removeAllViews()
@@ -378,27 +385,25 @@ class LegacyCarActivity : CarActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(0, dp(18), 0, 0)
         }
+        // Search sits in the MIDDLE of the tile grid, not under it. The bottom of
+        // a vertically-centred column is the first thing a short landscape head
+        // unit clips, which is how the old bottom pill went missing in the car
+        // while it still showed on the DHU. Scores shares that middle row.
+        val search = Tile("Search", R.drawable.ic_nav_search, 0) {
+            show(webPage("Google", "https://www.google.com", GOOGLE_SEARCH))
+        }
         val tiles = listOf(
             Tile("Live TV", R.drawable.ic_nav_live, 0) { show(liveGroupsPage()) },
             Tile("Movies", R.drawable.ic_nav_movies, 0) { show(movieGroupsPage()) },
+            Tile("Scores", R.drawable.ic_nav_sports, 1) { show(scoresPage()) },
+            search,
             Tile("TV Shows", R.drawable.ic_nav_tv, 1) { show(showGroupsPage()) },
             Tile("YouTube", R.drawable.ic_nav_youtube, 1) {
                 show(webPage("YouTube", "https://m.youtube.com", YOUTUBE_SEARCH))
             },
         )
-        // Search sits in the MIDDLE of the tile grid, not under it. The bottom of
-        // a vertically-centred column is the first thing a short landscape head
-        // unit clips, which is how the old bottom pill went missing in the car
-        // while it still showed on the DHU.
-        val search = Tile("Search", R.drawable.ic_nav_search, 0) {
-            show(webPage("Google", "https://www.google.com", GOOGLE_SEARCH))
-        }
-        val base = tiles.chunked(2)
-        val rows = buildList {
-            add(base[0])
-            add(listOf(search))
-            addAll(base.drop(1))
-        }
+        // Live/Movies · Scores/Search · Shows/YouTube — six tiles, three rows.
+        val rows = tiles.chunked(2)
         rows.forEach { row ->
             val rowLay = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -625,6 +630,394 @@ class LegacyCarActivity : CarActivity() {
             ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         return col
     }
+
+    // ------------------------------------------------------------ scores ---
+    /**
+     * Scores page: the same slate the phone's Sports tab draws, as game cards.
+     *
+     * Owner's rules carried over unchanged: live games first, league chips filter the slate,
+     * and a tap resolves the game's broadcast to a channel in the playlist — one match plays,
+     * several open a picker, none says so on the status line (a car has no toast to rely on).
+     *
+     * The slate itself comes from the shared [ScoreSource]; nothing here talks to ESPN.
+     */
+    private var scoreSlate: List<ScoreGame> = emptyList()
+    private var scoreLeague = "ALL"
+    private var scoreFetchAt = 0L
+    private var scoreFetching = false
+    private var scoreStatus: TextView? = null
+    private var scoreChipsRow: LinearLayout? = null
+    private var scoreAdapter: ScoreAdapter? = null
+
+    /** Live games move, so re-poll while the scores page is the page on screen. 60s matches
+     *  ScoreSource's own cache window — polling faster only ever returns the cache. */
+    private val scoreTicker = object : Runnable {
+        override fun run() {
+            if (current?.title != "SCORES") return
+            loadScores(force = true)
+            handler.postDelayed(this, 60_000L)
+        }
+    }
+
+    /** Helmet hues for score cards: eight far-apart colours (the guide's HUES are too alike
+     *  side by side). Same set the phone uses. */
+    private val SCORE_HUES = intArrayOf(
+        0xFFFF9F1C.toInt(), 0xFF4EA8DE.toInt(), 0xFF9B5DE5.toInt(), 0xFF2EC4B6.toInt(),
+        0xFFE86A92.toInt(), 0xFFB5C94B.toInt(), 0xFFF2C14E.toInt(), 0xFF8C7BFF.toInt(),
+    )
+    private fun scoreHue(name: String) =
+        SCORE_HUES[(name.hashCode() and 0x7fffffff) % SCORE_HUES.size]
+
+    private fun scoreHues(g: ScoreGame): Pair<Int, Int> {
+        val away = scoreHue(g.away)
+        val raw = scoreHue(g.home)
+        val home = if (raw == away) SCORE_HUES[(SCORE_HUES.indexOf(away) + 3) % SCORE_HUES.size]
+        else raw
+        return away to home
+    }
+
+    private fun scoresPage(): Page = Page("SCORES") { buildScores() }
+
+    private fun buildScores(): View {
+        val view = column("SCORES", HeaderAction("⟳") { loadScores(force = true) }) {
+            // A stream may be running from the guide or a channel list; the car has no
+            // other route back to the picture from here.
+            svc?.currentTitle?.takeIf { it.isNotBlank() }?.let { t ->
+                addView(pill("▶  Now playing · $t") { show(videoPage(t)) }.apply {
+                    (layoutParams as? LinearLayout.LayoutParams)?.topMargin = dp(4)
+                })
+            }
+            addView(buildScoreChips())
+            val status = text("", 11f, Palette.MUTED, false).apply {
+                gravity = Gravity.START
+                setPadding(dp(20), dp(6), dp(20), dp(2))
+                maxLines = 2
+            }
+            scoreStatus = status
+            addView(status)
+            val list = ListView(this@LegacyCarActivity).apply {
+                adapter = ScoreAdapter(scoreFiltered()).also { scoreAdapter = it }
+                divider = android.graphics.drawable.ColorDrawable(Color.argb(28, 255, 255, 255))
+                dividerHeight = 1
+                cacheColorHint = Color.TRANSPARENT
+                setPadding(dp(8), dp(2), dp(8), dp(8))
+                clipToPadding = false
+            }
+            addView(list, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        }
+        updateScoreStatus()
+        loadScores(force = false)
+        handler.removeCallbacks(scoreTicker)
+        handler.postDelayed(scoreTicker, 60_000L)
+        return view
+    }
+
+    private fun scoreFiltered(): List<ScoreGame> =
+        if (scoreLeague == "ALL") scoreSlate else scoreSlate.filter { it.league == scoreLeague }
+
+    private val SCORE_LEAGUES = listOf("NFL", "NCAAF", "NBA", "NCAAB", "MLB", "NHL")
+
+    /** Only leagues that actually have games — an empty chip is a dead end on a head unit. */
+    private fun scoreLeagues(): List<String> {
+        if (scoreSlate.isEmpty()) return SCORE_LEAGUES
+        return SCORE_LEAGUES.filter { l -> scoreSlate.any { it.league == l } }
+    }
+
+    private fun buildScoreChips(): View {
+        val strip = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(16), dp(6), dp(16), dp(2))
+        }
+        scoreChipsRow = strip
+        fillScoreChips(strip)
+        return HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(strip)
+        }
+    }
+
+    private fun fillScoreChips(strip: LinearLayout) {
+        strip.removeAllViews()
+        val entries = ArrayList<Pair<String, Int>>()
+        entries += "ALL" to scoreSlate.size
+        scoreLeagues().forEach { l -> entries += l to scoreSlate.count { it.league == l } }
+        entries.forEach { (league, count) ->
+            val on = league == scoreLeague
+            strip.addView(text(
+                if (count > 0) "$league  $count" else league,
+                12.5f,
+                if (on) 0xFF0B0B10.toInt() else Palette.MUTED,
+                true,
+            ).apply {
+                isClickable = true
+                isFocusable = true
+                setPadding(dp(13), dp(7), dp(13), dp(7))
+                background = capsule(if (on) Palette.ACCENTS[0] else Palette.CARD, 18f)
+                setOnClickListener {
+                    scoreLeague = league
+                    scoreAdapter?.let { a ->
+                        a.games = scoreFiltered()
+                        a.notifyDataSetChanged()
+                    }
+                    fillScoreChips(strip)
+                    updateScoreStatus()
+                    Log.i(TAG, "scores: league -> $scoreLeague (${scoreFiltered().size} games)")
+                }
+            }, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { marginEnd = dp(8) })
+        }
+    }
+
+    private fun updateScoreStatus() {
+        val st = scoreStatus ?: return
+        val games = scoreFiltered()
+        st.setTextColor(Palette.MUTED)
+        st.text = when {
+            scoreFetching && scoreSlate.isEmpty() -> "Fetching the slate…"
+            scoreSlate.isEmpty() -> "No scores right now — ESPN unreachable, or no games today."
+            games.isEmpty() -> "No $scoreLeague games on the slate."
+            else -> buildString {
+                append(if (games.size == 1) "1 game" else "${games.size} games")
+                val live = games.count { it.live }
+                if (live > 0) append(" · $live live")
+                append(" · ESPN")
+            }
+        }
+    }
+
+    private fun loadScores(force: Boolean) {
+        if (scoreFetching) return
+        val now = System.currentTimeMillis()
+        if (!force && scoreSlate.isNotEmpty() && now - scoreFetchAt < 30_000L) return
+        scoreFetching = true
+        scoreFetchAt = now
+        updateScoreStatus()
+        scope.launch {
+            val slate = withContext(Dispatchers.IO) {
+                runCatching { ScoreSource.slate() }.getOrDefault(emptyList())
+            }
+            scoreFetching = false
+            if (slate.isNotEmpty()) scoreSlate = slate
+            // A league with nothing on today must not leave the page filtered to nothing.
+            if (scoreLeague != "ALL" && scoreSlate.none { it.league == scoreLeague }) {
+                scoreLeague = "ALL"
+            }
+            Log.i(
+                TAG, "scores: ${slate.size} games, ${slate.count { it.live }} live, " +
+                    "leagues=${slate.map { it.league }.distinct()}",
+            )
+            if (current?.title != "SCORES") return@launch
+            scoreAdapter?.let { a ->
+                a.games = scoreFiltered()
+                a.notifyDataSetChanged()
+            }
+            scoreChipsRow?.let { fillScoreChips(it) }
+            updateScoreStatus()
+        }
+    }
+
+    /** One line of feedback in the header area (no toasts in a hosted car activity). */
+    private fun sayScore(msg: String) {
+        val st = scoreStatus ?: return
+        st.setTextColor(Palette.ACCENTS[0])
+        st.text = msg
+        st.postDelayed({
+            if (st === scoreStatus) updateScoreStatus()
+        }, 6_000L)
+    }
+
+    private inner class ScoreAdapter(var games: List<ScoreGame>) : BaseAdapter() {
+        override fun getCount() = games.size
+        override fun getItem(position: Int) = games[position]
+        override fun getItemId(position: Int) = position.toLong()
+        override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
+            val row = (convertView as? LinearLayout) ?: LinearLayout(this@LegacyCarActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(4), dp(3), dp(4), dp(3))
+            }
+            row.removeAllViews()
+            bindGameCard(row, games[position])
+            return row
+        }
+    }
+
+    private fun bindGameCard(row: LinearLayout, g: ScoreGame) {
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = capsule(Palette.CARD, 16f)
+            val pad = if (g.completed) dp(7) else dp(9)
+            setPadding(dp(12), pad, dp(12), pad)
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { openGame(g) }
+        }
+        if (g.completed) buildFinalLine(card, g) else buildLiveCard(card, g)
+        row.addView(card, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+    }
+
+    private fun broadcastPill(bc: String) = text(bc, 10.5f, Palette.ACCENTS[0], true).apply {
+        setPadding(dp(9), dp(3), dp(9), dp(3))
+        background = capsule(tint(Palette.ACCENTS[0], 0x26), 20f)
+    }
+
+    private fun buildLiveCard(card: LinearLayout, g: ScoreGame) {
+        val top = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        top.addView(text(if (g.live) "● LIVE" else g.status, 10.5f,
+            if (g.live) 0xFFFF6B6B.toInt() else Palette.TEXT, true).apply {
+            gravity = Gravity.START
+        })
+        g.detail?.let { d ->
+            top.addView(text("  $d", 10.5f, Palette.MUTED, true).apply { gravity = Gravity.START })
+        }
+        top.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
+        g.broadcasts.firstOrNull()?.let { top.addView(broadcastPill(it)) }
+        card.addView(top)
+
+        val (awayHue, homeHue) = scoreHues(g)
+        card.addView(teamLine(g.away, g.awayAbbr, g.awayScore, g, true, awayHue))
+        card.addView(teamLine(g.home, g.homeAbbr, g.homeScore, g, false, homeHue))
+        card.addView(text(
+            listOfNotNull(g.league, g.note?.takeIf { it.length < 34 }).joinToString(" · "),
+            10f, Palette.DIM, false,
+        ).apply {
+            gravity = Gravity.START
+            setPadding(0, dp(4), 0, 0)
+        })
+    }
+
+    private fun teamLine(
+        name: String,
+        abbr: String,
+        score: String?,
+        g: ScoreGame,
+        isAway: Boolean,
+        hue: Int,
+    ): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(4), 0, 0)
+        }
+        row.addView(teamMark(name, abbr, hue, g.league,
+            if (isAway) g.awayLogo else g.homeLogo, 26))
+        row.addView(text(name, 14f, Palette.TEXT, true).apply {
+            gravity = Gravity.START
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            .apply { leftMargin = dp(10) })
+        val other = if (isAway) g.homeScore else g.awayScore
+        val leading = score != null && other != null &&
+            (score.toIntOrNull() ?: 0) > (other.toIntOrNull() ?: 0)
+        row.addView(text(
+            score ?: "–", 18f,
+            if (leading || (!g.live && !g.completed)) Palette.TEXT else Palette.DIM, true,
+        ))
+        return row
+    }
+
+    /** FINAL card collapses to one line, so a finished slate scans like results. */
+    private fun buildFinalLine(card: LinearLayout, g: ScoreGame) {
+        val (awayHue, homeHue) = scoreHues(g)
+        // Hockey and baseball badges are shapes, not letter tiles, so their
+        // abbreviations sit beside the score.
+        val shaped = g.league == "NHL" || g.league == "MLB"
+        fun tag(s: String) = text(s, 10.5f, Palette.MUTED, true).apply {
+            setPadding(dp(6), 0, dp(2), 0)
+        }
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        row.addView(teamMark(g.away, g.awayAbbr, awayHue, g.league, g.awayLogo, 26))
+        if (shaped) row.addView(tag(g.awayAbbr.take(3)))
+        row.addView(text(g.awayScore ?: "–", 17f, Palette.TEXT, true).apply {
+            setPadding(if (shaped) dp(4) else dp(8), 0, 0, 0)
+        })
+        row.addView(text("–", 14f, Palette.DIM, true).apply { setPadding(dp(4), 0, dp(4), 0) })
+        row.addView(text(g.homeScore ?: "–", 17f, Palette.DIM, true))
+        if (shaped) row.addView(tag(g.homeAbbr.take(3)))
+        row.addView(teamMark(g.home, g.homeAbbr, homeHue, g.league, g.homeLogo, 26).apply {
+            (layoutParams as LinearLayout.LayoutParams).leftMargin = dp(8)
+        })
+        row.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
+        row.addView(text("FINAL", 9.5f, Palette.DIM, true))
+        g.broadcasts.firstOrNull()?.let { bc ->
+            row.addView(broadcastPill(bc), LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { leftMargin = dp(8) })
+        }
+        card.addView(row)
+    }
+
+    /**
+     * Team mark: the ESPN logo when it loads, our own [TeamBadge] underneath when it does
+     * not. Nothing is drawn if both fail, so a card never shows a broken image box.
+     */
+    private fun teamMark(
+        name: String,
+        abbr: String,
+        hue: Int,
+        league: String,
+        logoUrl: String?,
+        sizeDp: Int,
+    ): View {
+        val holder = FrameLayout(this)
+        val badge = TeamBadge(this, abbr.take(3).ifBlank { name.take(2) }, hue, league)
+        holder.addView(badge, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        if (!logoUrl.isNullOrBlank()) {
+            val img = ImageView(this).apply { scaleType = ImageView.ScaleType.FIT_CENTER }
+            holder.addView(img, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+            img.load(logoUrl) {
+                listener(
+                    onSuccess = { _, _ -> badge.visibility = View.GONE },
+                    onError = { _, _ -> holder.removeView(img) },
+                )
+            }
+        }
+        holder.layoutParams = LinearLayout.LayoutParams(dp(sizeDp), dp(sizeDp))
+        return holder
+    }
+
+    /**
+     * Broadcast → channel. One match plays, several open a picker page, none says so: never
+     * open a stream that has nothing to do with the game.
+     */
+    private fun openGame(g: ScoreGame) {
+        val channels = repo.activePlaylist?.channels.orEmpty()
+        if (channels.isEmpty()) {
+            sayScore("Load a source first")
+            return
+        }
+        val hits = channels.filter { ch ->
+            g.broadcasts.any { b -> ch.name.uppercase().contains(b.uppercase()) }
+        }
+        Log.i(TAG, "score tap: ${g.away} at ${g.home} ${g.broadcasts} -> ${hits.size} channels")
+        when {
+            hits.size == 1 -> playChannel(hits[0])
+            hits.isEmpty() -> sayScore(
+                (g.broadcasts.firstOrNull()?.let { "$it is not in your playlist" }
+                    ?: "No broadcast listed for this game"),
+            )
+            else -> show(scorePickerPage(g, hits))
+        }
+    }
+
+    private fun scorePickerPage(g: ScoreGame, hits: List<Channel>): Page =
+        listPage("${g.awayAbbr.ifBlank { g.away }} at ${g.homeAbbr.ifBlank { g.home }}") {
+            hits.take(20).map { ch ->
+                Row(ch.name, ch.group.ifBlank { "Live TV" }, channel = ch) { playChannel(ch) }
+            }
+        }
+
 
     // ---------------------------------------------------------- live tv ---
     private fun liveGroupsPage(): Page = listPage(
