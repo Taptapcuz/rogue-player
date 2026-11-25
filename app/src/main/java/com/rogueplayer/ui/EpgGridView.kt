@@ -63,6 +63,32 @@ class EpgGridView @JvmOverloads constructor(
     private var scrollX = 0f
     private var scrollY = 0f
 
+    /**
+     * Where the view is scrolled to. The guide page is rebuilt from scratch every time
+     * it is shown (e.g. coming back from full screen), and a fresh view starts at
+     * (0,0) — which dumped the viewer at the top of the list, at the start of the
+     * timeline, every time. Callers keep these and hand them back to [restoreScroll].
+     */
+    val scrollOffsetX: Float get() = scrollX
+    val scrollOffsetY: Float get() = scrollY
+
+    /** Fires on every move (drag, fling, scrub) with the offset it moved to. */
+    var onScrollMoved: ((Float, Float) -> Unit)? = null
+
+    private fun notifyMoved() {
+        onScrollMoved?.invoke(scrollX, scrollY)
+    }
+
+    /** Put the grid back where it was, after the page view was rebuilt. */
+    fun restoreScroll(x: Float, y: Float) {
+        scrollX = x
+        scrollY = y
+        clampScroll()
+        invalidate()
+        notifyVisible()
+        notifyMoved()
+    }
+
     /** Width of any overlay pinned to the right (the preview pane), in px. */
     var rightInset: Float = 0f
         set(value) {
@@ -113,6 +139,10 @@ class EpgGridView @JvmOverloads constructor(
     private var lockAxis = 0
     private var downX = 0f
     private var downY = 0f
+    /** Scroll offset when the finger landed — the tap is resolved against this. */
+    private var downScrollX = 0f
+    private var downScrollY = 0f
+
 
     /**
      * Momentum. Vertical flicks get a much bigger multiplier — these lists run to
@@ -180,6 +210,7 @@ class EpgGridView @JvmOverloads constructor(
                 scrollY = scroller.currY.toFloat()
                 clampScroll()
                 notifyVisible()
+                notifyMoved()
                 invalidate()
                 postOnAnimation(this)
             }
@@ -194,6 +225,8 @@ class EpgGridView @JvmOverloads constructor(
             lockAxis = 0
             downX = e.x
             downY = e.y
+            downScrollX = scrollX
+            downScrollY = scrollY
             return true
         }
 
@@ -217,6 +250,7 @@ class EpgGridView @JvmOverloads constructor(
             clampScroll()
             invalidate()
             notifyVisible()
+            notifyMoved()
             return true
         }
 
@@ -241,26 +275,53 @@ class EpgGridView @JvmOverloads constructor(
         }
 
         override fun onSingleTapUp(e: MotionEvent): Boolean {
-            if (e.x < gutterWidth) {
-                if (e.y < rulerHeight) return true
-                val rowIndex = ((e.y - rulerHeight + scrollY) / rowHeight).toInt()
-                rows.getOrNull(rowIndex)?.let { onChannelClick?.invoke(it.channel) }
-                return true
+            resolveTap(downX, downY, downScrollX, downScrollY)
+            return true
+        }
+
+        /**
+         * A second tap that lands quickly and near the first is reported as a DOUBLE tap
+         * and never reaches onSingleTapUp — so a fast "tap the channel, tap it again to go
+         * full screen" silently did nothing. Treat it as the same tap.
+         */
+        override fun onDoubleTapEvent(e: MotionEvent): Boolean {
+            // The folded second tap. onDoubleTap() only hands back the FIRST down event, so
+            // a quick second tap on a different row resolved to the row above it; the second
+            // tap's own position only arrives here, on its UP.
+            if (e.actionMasked == MotionEvent.ACTION_UP) resolveTap(e.x, e.y, scrollX, scrollY)
+            return true
+        }
+
+        /**
+         * Resolve the tap at the point the finger LANDED, not where it lifted, and against
+         * the scroll offset it landed on. Rows move under a finger — a fling still settling,
+         * a re-layout when the guide's data lands, the scroll clamp biting — so the UP point
+         * or a drifted offset names a different row. That is the "I tapped this channel and
+         * another one opened" report, and it only became visible once a second tap promotes
+         * a row to full screen.
+         */
+        private fun resolveTap(x: Float, y: Float, sx: Float, sy: Float) {
+            if (x < gutterWidth) {
+                if (y < rulerHeight) return
+                val rowIndex = ((y - rulerHeight + sy) / rowHeight).toInt()
+                val ch = rows.getOrNull(rowIndex)?.channel
+                ch?.let { onChannelClick?.invoke(it) }
+                return
             }
-            val hit = hitTest(e.x, e.y)
+            val hit = hitTestAt(x, y, sx, sy)
             if (hit != null) {
                 onProgramClick?.invoke(hit.first, hit.second)
-                return true
+                return
             }
             // Nothing under the finger: the channel has no guide data (the row draws
             // "No guide data") or the tap landed in an empty slot. Select the channel
             // anyway — swallowing the tap made the right side of the guide feel dead
             // whenever the provider returned no EPG.
-            if (e.y >= rulerHeight) {
-                val rowIndex = ((e.y - rulerHeight + scrollY) / rowHeight).toInt()
-                rows.getOrNull(rowIndex)?.let { onChannelClick?.invoke(it.channel) }
+            if (y >= rulerHeight) {
+                val rowIndex = ((y - rulerHeight + sy) / rowHeight).toInt()
+                val ch = rows.getOrNull(rowIndex)?.channel
+                ch?.let { onChannelClick?.invoke(it) }
             }
-            return true
         }
     })
 
@@ -323,11 +384,14 @@ class EpgGridView @JvmOverloads constructor(
         }
     }
 
-    private fun hitTest(x: Float, y: Float): Pair<Channel, EpgProgram>? {
+    private fun hitTest(x: Float, y: Float): Pair<Channel, EpgProgram>? =
+        hitTestAt(x, y, scrollX, scrollY)
+
+    private fun hitTestAt(x: Float, y: Float, scrollX: Float, scrollY: Float): Pair<Channel, EpgProgram>? {
         if (x < gutterWidth || y < rulerHeight + dp(4f)) return null
         val rowIndex = ((y - rulerHeight + scrollY) / rowHeight).toInt()
         val row = rows.getOrNull(rowIndex) ?: return null
-        val t = timeOf(x)
+        val t = startTime + ((x - gutterWidth + scrollX) / pxPerMinute * 60_000f).toLong()
         return row.programmes.firstOrNull { t >= it.start && t < it.end }?.let { row.channel to it }
     }
 
@@ -355,6 +419,7 @@ class EpgGridView @JvmOverloads constructor(
         for (i in firstRow..lastRow) {
             val row = rows[i]
             val top = rulerHeight + i * rowHeight - scrollY
+            val bottom = top + rowHeight
             if (row.channel.id == selectedChannelId) {
                 blockPaint.color = withAlpha(Palette.ACCENTS[0], 0x30)
                 rect.set(gutterWidth, top, rightEdge(), top + rowHeight)
@@ -427,6 +492,7 @@ class EpgGridView @JvmOverloads constructor(
         scrollY = frac * maxScrollY()
         invalidate()
         notifyVisible()
+        notifyMoved()
     }
 
     private fun drawRowBlocks(canvas: Canvas, row: Row, top: Float, now: Long) {
@@ -635,6 +701,7 @@ class EpgGridView @JvmOverloads constructor(
             clampScroll()
             postInvalidateOnAnimation()
             notifyVisible()
+            notifyMoved()
         }
     }
 

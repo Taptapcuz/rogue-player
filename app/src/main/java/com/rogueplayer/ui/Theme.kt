@@ -1,6 +1,7 @@
 package com.rogueplayer.ui
 
 import com.rogueplayer.data.Channel
+import com.rogueplayer.data.ScoreGame
 import com.rogueplayer.data.Entry
 import com.rogueplayer.data.Episode
 
@@ -39,4 +40,5 @@ sealed interface BrowseItem {
     data class PosterCard(val e: Entry, val isMovie: Boolean) : BrowseItem // poster card
     data class EpisodeItem(val ep: Episode, val seriesTitle: String) : BrowseItem // series episode
     data class GroupRow(val group: String, val count: Int) : BrowseItem // tappable category row (Sports)
+    data class ScoreCard(val g: ScoreGame) : BrowseItem      // game card on the Sports tab
 }

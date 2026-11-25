@@ -50,6 +50,8 @@ class PlaybackService : Service() {
     /** What is currently loaded, so a decoder failure can be re-prepared. */
     private var currentUrl: String? = null
     private var currentSurface: android.view.Surface? = null
+    /** True when the last surface detach paused the player — the next surface resumes it. */
+    private var pausedForDetach = false
 
     /** How many times this stream has been rebuilt after a decoder failure. */
     private var recoveryAttempts = 0
@@ -118,13 +120,52 @@ class PlaybackService : Service() {
     fun getPlayer(): ExoPlayer = ensurePlayer()
 
     /**
+     * A/V offset in ms: >0 holds the audio back by that much (the picture leads it by
+     * fewer/zero ms), used when the car's audio path outruns its video path. 0 = the
+     * untouched default player, no audio processor installed.
+     */
+    var audioDelayMs: Int
+        get() = avPrefs.getInt(KEY_AV_DELAY, 0).coerceIn(0, MAX_AV_DELAY)
+        private set(value) {
+            avPrefs.edit().putInt(KEY_AV_DELAY, value.coerceIn(0, MAX_AV_DELAY)).apply()
+        }
+
+    private val avPrefs by lazy { getSharedPreferences("mytv_playback", MODE_PRIVATE) }
+
+    /**
+     * Change the offset and rebuild the player so the new sink takes effect. The
+     * stream restarts at its current position — the offset only exists at sink level,
+     * so there is no way to retune it in place.
+     */
+    fun setAudioDelay(ms: Int) {
+        val next = ms.coerceIn(0, MAX_AV_DELAY)
+        if (next == audioDelayMs) return
+        audioDelayMs = next
+        val url = currentUrl
+        val title = currentTitle
+        val pos = runCatching { player?.currentPosition ?: 0L }.getOrDefault(0L)
+        val wasPlaying = runCatching { player?.isPlaying == true }.getOrDefault(false)
+        runCatching { player?.release() }
+        player = null
+        val fresh = ensurePlayer()
+        if (!url.isNullOrBlank()) {
+            fresh.setMediaSource(buildMediaSource(url))
+            fresh.prepare()
+            if (pos > 0) fresh.seekTo(pos)
+            fresh.playWhenReady = true
+            Log.i(TAG, "audio delay ${next}ms applied (restarted $title)")
+        }
+    }
+
+    /**
      * Build (or reuse) the player. [softwareVideo] restricts video decoding to
      * software codecs — the escape hatch after the hardware decoder (QTI `c2.qti.*`)
      * dies on a stream it cannot handle.
      */
     private fun ensurePlayer(softwareVideo: Boolean = false): ExoPlayer {
         player?.let { return it }
-        val renderers = DefaultRenderersFactory(this).setEnableDecoderFallback(true)
+        val delay = audioDelayMs
+        val renderers = DelayRenderersFactory(this, delay).setEnableDecoderFallback(true)
         if (softwareVideo) {
             renderers.setMediaCodecSelector { mimeType, secure, tunneling ->
                 val all = MediaCodecUtil.getDecoderInfos(mimeType, secure, tunneling)
@@ -326,6 +367,13 @@ class PlaybackService : Service() {
             // Detach only after pausing: clearing the surface mid-render makes the
             // codec flush an already-released instance
             // (`flush() is valid only at Executing states; currently at Released state`).
+            //
+            // Pausing is a codec-safety measure, not an instruction to stop: moving
+            // between two pages that both have a picture (guide rail → full screen,
+            // full screen → rail) detaches one surface and attaches another. Remember
+            // whether we were playing so the next surface can put it back, otherwise
+            // every page change silently left the stream paused.
+            pausedForDetach = p.playWhenReady
             runCatching { p.pause() }
             runCatching { p.setVideoSurface(null) }
             // Leaving the video screen ends this viewing session, so a later ▶ Stream gets
@@ -334,6 +382,15 @@ class PlaybackService : Service() {
             return
         }
         runCatching { p.setVideoSurface(surface) }
+        // Hand the picture to the new surface with its playback intent intact (see the
+        // detach above). Only the pause we caused ourselves is undone here — a stream
+        // the user paused stays paused.
+        if (pausedForDetach) {
+            pausedForDetach = false
+            runCatching {
+                p.playWhenReady = true
+            }
+        }
         // Coming back from the channel list ("Stream"): the stream may have died while the
         // video screen was gone — decoder retries exhausted, or the playlist was stopped —
         // and the player then hands the host a black pane with no way back. Re-prepare
@@ -352,6 +409,24 @@ class PlaybackService : Service() {
         }
     }
 
+    /**
+     * Detach a surface only if it is still the one attached.
+     *
+     * A view that is being torn down posts this from its TextureView destroy
+     * callback, and that callback lands asynchronously — often AFTER the next page
+     * has already attached its own surface. Unconditional detaching then pauses the
+     * stream the new page just started (the "go back from full screen and the rail
+     * is paused" bug). With the identity check a dying view can only detach what it
+     * still owns, so a stale page can never pause a live one.
+     */
+    fun detachVideoSurface(surface: android.view.Surface?) {
+        if (surface == null || currentSurface !== surface) {
+            Log.i(TAG, "ignored stale surface detach (a newer surface is attached)")
+            return
+        }
+        setVideoSurface(null)
+    }
+
     fun stop() {
         Log.d("MYTVPlay", "stop()")
         player?.let { exo ->
@@ -361,6 +436,7 @@ class PlaybackService : Service() {
         currentUrl = null
         currentTitle = ""
         recoveryAttempts = 0
+        pausedForDetach = false
         state = PlaybackState.Idle
     }
 
@@ -439,7 +515,38 @@ class PlaybackService : Service() {
         private const val MAX_CODEC_RECOVERIES = 2
         private const val TAG = "MYTVPlay"
 
+        /** Stored A/V offset (ms) and its ceiling — see [setAudioDelay]. */
+        private const val KEY_AV_DELAY = "av_delay_ms"
+        private const val MAX_AV_DELAY = 500
+
         fun toPlaybackActions(intent: Intent): String? = intent.action
+    }
+
+    /**
+     * Renderers factory with the A/V offset baked into the audio sink. With a delay of
+     * 0 it returns the stock sink, so the default path is exactly what it was.
+     */
+    private class DelayRenderersFactory(
+        context: android.content.Context,
+        private val delayMs: Int,
+    ) : DefaultRenderersFactory(context) {
+        override fun buildAudioSink(
+            context: android.content.Context,
+            enableFloatOutput: Boolean,
+            enableAudioTrackPlaybackParams: Boolean,
+        ): androidx.media3.exoplayer.audio.AudioSink {
+            if (delayMs <= 0) {
+                return super.buildAudioSink(context, enableFloatOutput, enableAudioTrackPlaybackParams)!!
+            }
+            val chain = androidx.media3.exoplayer.audio.DefaultAudioSink.DefaultAudioProcessorChain(
+                *arrayOf<androidx.media3.common.audio.AudioProcessor>(AudioDelayProcessor(delayMs)),
+            )
+            return androidx.media3.exoplayer.audio.DefaultAudioSink.Builder(context)
+                .setAudioProcessorChain(chain)
+                .setEnableFloatOutput(enableFloatOutput)
+                .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                .build()
+        }
     }
 }
 

@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- Cosmetic switch: whether live-TV channel cards render as pill capsules.
-         Default (shared / locked Rogue Player) = rounded rectangles. The basic
-         edition flips this to true for the redesign look. Same channel data,
-         schedule and progress — only the container shape differs. -->
-    <bool name="rp_pill_cards">false</bool>
+         On everywhere now (shared/locked/basic) — the pill look is the design, and
+         the car edition draws the same language by hand in LegacyCarActivity /
+         EpgGridView. Same channel data, schedule and progress; only the container
+         differs. -->
+    <bool name="rp_pill_cards">true</bool>
 </resources>

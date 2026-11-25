@@ -12,6 +12,7 @@ import android.graphics.Typeface
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Log
 import android.util.AttributeSet
 import android.view.Choreographer
 import android.view.View
@@ -80,6 +81,12 @@ class SplashView @JvmOverloads constructor(
     private val mainHandler = Handler(Looper.getMainLooper())
     private var runStartMs = 0L
     private var running = false
+
+    /** Frames this view has actually painted since it was created. The car boot
+     *  watches this to tell "the host is showing us" from "we are drawing into a
+     *  window that isn't on screen yet". */
+    var paintedFrames = 0
+        private set
     private var endRunnable: Runnable? = null
 
     private var w = 0
@@ -225,6 +232,17 @@ class SplashView @JvmOverloads constructor(
 
     private fun advanceNow() {
         if (!running) return
+        if (runStartMs == 0L) {
+            // Wait for a frame that can actually be drawn: attached and measured.
+            // Whatever the host does before that costs us no animation time.
+            if (!isAttachedToWindow || width == 0 || !isShown) {
+                Choreographer.getInstance().postFrameCallback(frameCb)
+                return
+            }
+            runStartMs = SystemClock.uptimeMillis()
+            Log.i("SplashView", "boot clock armed on first drawable frame (${width}x$height)")
+            endRunnable?.let { mainHandler.postAtTime(it, runStartMs + DURATION_MS) }
+        }
         nowMs = (SystemClock.uptimeMillis() - runStartMs).toFloat()
         stepLetters()
         stepOrbs()
@@ -377,6 +395,7 @@ class SplashView @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         if (w == 0 || h == 0) return
+        paintedFrames++
         val t = (nowMs / DURATION_MS).coerceIn(0f, 1f)
         val first = letters.firstOrNull()
         val blockHalf = (first?.size?.times(1.1f) ?: 0f)
@@ -685,12 +704,15 @@ class SplashView @JvmOverloads constructor(
         if (running) return
         running = true
         ambientPreload()
-        runStartMs = SystemClock.uptimeMillis()
+        // The clock is anchored to the first frame that actually PAINTS (see
+        // advanceNow), not to this call: a car host can create the view seconds
+        // before it shows the window, and time spent drawing into nothing is what
+        // made the boot "sometimes show, sometimes not".
+        runStartMs = 0L
         Choreographer.getInstance().postFrameCallback(frameCb)
         endRunnable = Runnable {
             if (running) { running = false; onDone() }
         }
-        mainHandler.postAtTime(endRunnable!!, runStartMs + DURATION_MS)
     }
 
     override fun onDetachedFromWindow() {

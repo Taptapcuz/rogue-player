@@ -87,6 +87,8 @@ class LegacyCarActivity : CarActivity() {
     /** Guide data by channel id — activity-level so leaving and re-entering the
      *  guide never re-fetches what is already loaded. */
     private val guideEpg = mutableMapOf<String, List<EpgProgram>>()
+    /** The ListView adapter on screen, so EPG arriving later can refresh the rows. */
+    private var rowAdapter: RowAdapter? = null
     private val guideRequested = mutableSetOf<String>()
     private val guideRetryAt = mutableMapOf<String, Long>()
     private var guideLoadJob: Job? = null
@@ -108,12 +110,24 @@ class LegacyCarActivity : CarActivity() {
     private var previewOn = true
     private var previewChannel: Channel? = null
     private var previewSurface: Surface? = null
+    /** The surface the current rail's own TextureView created — what it may detach. */
+    private var railSurface: Surface? = null
+    /** Guide scroll offset, kept across the page rebuilds that every return causes. */
+    private var guideScrollX = 0f
+    private var guideScrollY = 0f
+    private var guideScrollValid = false
     private var previewName: TextView? = null
     private var previewNow: TextView? = null
     private var previewNext: TextView? = null
     private var previewTrack: View? = null
     private var previewFill: View? = null
     private var previewHint: TextView? = null
+    /** Last channel played (from the rail or a programme block) — what the guide
+     *  restores into the rail when you come back from full screen. */
+    private var lastPlayed: Channel? = null
+    /** Set by back() when the page we are returning to is the guide, so the guide
+     *  re-starts the channel in its rail instead of un-pausing a torn-down player. */
+    private var resumePreviewOnReturn = false
     private val timeFmt = java.text.SimpleDateFormat("HH:mm", java.util.Locale.US)
 
     /** Keeps the pane's now/next line and progress bar in step without re-fetching. */
@@ -182,6 +196,13 @@ class LegacyCarActivity : CarActivity() {
         show(videoPage(title))
     }
 
+    /** Full-screen play of a known channel, remembered so the guide can put it
+     *  back into its preview rail afterwards. */
+    private fun playChannel(ch: Channel) {
+        lastPlayed = ch
+        play(ch.url, ch.name)
+    }
+
     // -------------------------------------------------------- navigation ---
     private class Page(val title: String, val build: () -> View)
     private val backStack = ArrayDeque<Page>()
@@ -202,6 +223,11 @@ class LegacyCarActivity : CarActivity() {
 
     private fun back() {
         val prev = backStack.removeLastOrNull()
+        // Returning from full screen into the guide: re-select the channel on the
+        // way back so the rail starts its own stream, instead of trying to un-pause
+        // a player whose surface the video page just tore down.
+        resumePreviewOnReturn = prev != null && prev.title == "TV Guide" &&
+            svc?.currentTitle?.isNotBlank() == true
         if (prev == null) exitCarApp() else show(prev, pushCurrent = false)
     }
 
@@ -271,9 +297,20 @@ class LegacyCarActivity : CarActivity() {
             }
         }
         Choreographer.getInstance().postFrameCallback(pump)
+        // Watchdog: a hosted car Activity can sit created-but-not-shown for seconds.
+        // If not one frame has painted, don't burn the animation into the void —
+        // go straight to the landing (and say so), instead of the owner seeing the
+        // boot "sometimes show, sometimes not".
+        handler.postDelayed({
+            if (!bootFinished && sv.paintedFrames == 0) {
+                Log.i(TAG, "boot: no frame painted in 3s — skipping straight to landing")
+                bootFinished = true
+                show(landingPage(), pushCurrent = false)
+            }
+        }, 3_000L)
         sv.start {
             bootFinished = true
-            Log.i(TAG, "boot: done -> landing")
+            Log.i(TAG, "boot: done -> landing (painted ${sv.paintedFrames} frames)")
             handler.post { show(landingPage(), pushCurrent = false) }
         }
     }
@@ -419,7 +456,13 @@ class LegacyCarActivity : CarActivity() {
         }
 
     // -------------------------------------------------------------- lists ---
-    private class Row(val title: String, val subtitle: String?, val onClick: () -> Unit)
+    private class Row(
+        val title: String,
+        val subtitle: String?,
+        val channel: Channel? = null,
+        val badge: String? = null,
+        val onClick: () -> Unit,
+    )
 
     /** A single trailing control in a page header (e.g. the Guide button). */
     private class HeaderAction(val label: String, val onClick: () -> Unit)
@@ -449,7 +492,7 @@ class LegacyCarActivity : CarActivity() {
         }
         all.addAll(rows)
         val list = ListView(this).apply {
-            adapter = RowAdapter(all)
+            adapter = RowAdapter(all).also { rowAdapter = it }
             divider = android.graphics.drawable.ColorDrawable(Color.argb(40, 255, 255, 255))
             dividerHeight = 1
             cacheColorHint = Color.TRANSPARENT
@@ -472,10 +515,61 @@ class LegacyCarActivity : CarActivity() {
                 minimumHeight = dp(56)
             }
             v.removeAllViews()
-            v.addView(text(row.title, 15f, Palette.TEXT, true).apply { gravity = Gravity.START })
-            row.subtitle?.let {
-                v.addView(text(it, 11.5f, Palette.MUTED, false).apply { gravity = Gravity.START })
+            // Capsule row: rounded CARD pill on the BG, with a circular initial tile and a
+            // thin guide line. Pills here, but our own palette and our own layout.
+            val pill = LinearLayout(this@LegacyCarActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(12), dp(9), dp(12), dp(9))
+                background = capsule(Palette.CARD, 26f)
             }
+            pill.addView(initialsTile(row.title))
+            val col = LinearLayout(this@LegacyCarActivity).apply { orientation = LinearLayout.VERTICAL }
+            col.addView(text(row.title, 15f, Palette.TEXT, true).apply {
+                gravity = Gravity.START
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            })
+            row.subtitle?.let {
+                col.addView(text(it, 11.5f, Palette.MUTED, false).apply {
+                    gravity = Gravity.START
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                })
+            }
+            // The guide line and its progress bar, as on the phone's pills: what is on now,
+            // when it ends, and how far through it we are.
+            row.channel?.let { ch ->
+                val guide = guideLineFor(ch)
+                col.addView(text(guide.first, 11.5f, Palette.MUTED, false).apply {
+                    gravity = Gravity.START
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                }, LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(3) })
+                val frac = guide.second
+                val track = LinearLayout(this@LegacyCarActivity).apply { orientation = LinearLayout.HORIZONTAL }
+                track.addView(View(this@LegacyCarActivity).apply {
+                    setBackgroundColor(if (frac > 0f) Palette.ACCENTS[0] else Palette.LINE)
+                }, LinearLayout.LayoutParams(0, dp(3), frac.coerceAtLeast(0.02f)))
+                track.addView(View(this@LegacyCarActivity).apply { setBackgroundColor(Palette.LINE) },
+                    LinearLayout.LayoutParams(0, dp(3), (1f - frac).coerceAtLeast(0.02f)))
+                col.addView(track, LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(3)).apply { topMargin = dp(5) })
+            }
+            pill.addView(col, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                .apply { leftMargin = dp(12) })
+            row.badge?.let { b ->
+                pill.addView(text(b, 12f, Palette.ACCENTS[0], true).apply {
+                    setPadding(dp(10), dp(3), dp(10), dp(3))
+                    background = capsule(tint(Palette.ACCENTS[0], 0x26), 20f)
+                }, LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { leftMargin = dp(10) })
+            }
+            v.addView(pill, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
             v.setOnClickListener { row.onClick() }
             return v
         }
@@ -515,6 +609,14 @@ class LegacyCarActivity : CarActivity() {
         }
         col.addView(header, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        // Accent-led hairline under the header — the "line" half of the look.
+        val rule = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        rule.addView(View(this).apply { setBackgroundColor(Palette.ACCENTS[0]) },
+            LinearLayout.LayoutParams(dp(46), dp(2)))
+        rule.addView(View(this).apply { setBackgroundColor(Palette.LINE) },
+            LinearLayout.LayoutParams(0, dp(2), 1f))
+        col.addView(rule, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(2)))
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             fill()
@@ -527,7 +629,7 @@ class LegacyCarActivity : CarActivity() {
     // ---------------------------------------------------------- live tv ---
     private fun liveGroupsPage(): Page = listPage(
         "Live TV",
-        HeaderAction("Guide ▸") { show(guidePage(null)) },
+        HeaderAction("Guide ▸") { openGuide(null) },
     ) {
         val pl = repo.activePlaylist
         if (pl == null || pl.channels.isEmpty()) {
@@ -539,12 +641,12 @@ class LegacyCarActivity : CarActivity() {
             val out = ArrayList<Row>()
             val favs = shown.filter { it.id in favIds }
             if (favs.isNotEmpty()) {
-                out.add(Row("★ Favourites", "${favs.size} channels") {
+                out.add(Row("★ Favourites", "${favs.size} channels", badge = "${favs.size}") {
                     show(channelsPage("Favourites", favs))
                 })
             }
             shown.groupBy { it.group.ifBlank { "Ungrouped" } }.toSortedMap().forEach { (g, chs) ->
-                out.add(Row(g, "${chs.size} channels") { show(channelsPage(g, chs)) })
+                out.add(Row(g, "${chs.size} channels", badge = "${chs.size}") { show(channelsPage(g, chs)) })
             }
             out
         }
@@ -553,9 +655,10 @@ class LegacyCarActivity : CarActivity() {
     private fun channelsPage(title: String, channels: List<Channel>): Page =
         listPage(
             title,
-            HeaderAction("Guide ▸") { show(guidePage(channels)) },
+            HeaderAction("Guide ▸") { openGuide(channels) },
         ) {
-            channels.map { ch -> Row(ch.name, ch.group) { play(ch.url, ch.name) } }
+            ensureRowGuide(channels)
+            channels.map { ch -> Row(ch.name, ch.group, ch) { playChannel(ch) } }
         }
 
     // ------------------------------------------------------------- guide ---
@@ -572,6 +675,17 @@ class LegacyCarActivity : CarActivity() {
      * [guideEpg] at activity level, so backing out and returning to the guide does
      * not re-fetch anything.
      */
+    /**
+     * Open the guide as a new page: it starts at "now" and at the top, because the
+     * scoped list (all channels vs one category) is a different set of rows. Returns
+     * from full screen do NOT come through here — they rebuild the page that was
+     * already open and keep its offset.
+     */
+    private fun openGuide(scoped: List<Channel>?) {
+        guideScrollValid = false
+        show(guidePage(scoped))
+    }
+
     private fun guidePage(scoped: List<Channel>?): Page = Page("TV Guide") guide@{
         val pl = repo.activePlaylist
         if (pl == null || pl.channels.isEmpty()) {
@@ -655,13 +769,38 @@ class LegacyCarActivity : CarActivity() {
 
         val grid = EpgGridView(this).apply {
             rows = channels.map { EpgGridView.Row(it, guideEpg[it.id].orEmpty()) }
-            onChannelClick = { ch ->
-                selectedChannelId = ch.id
-                invalidate()
-                if (previewOn) startPreview(ch)
+            // This page is rebuilt from scratch on every return from full screen. Put the
+            // row highlight back on the channel the rail is holding, and keep the scroll
+            // offset so grid.post can restore it once the view has been measured.
+            selectedChannelId = previewChannel?.id
+            onScrollMoved = { x, y ->
+                guideScrollX = x
+                guideScrollY = y
+                guideScrollValid = true
             }
-            // One tap on a block plays it full screen; the gutter only selects.
-            onProgramClick = { ch, _ -> play(ch.url, ch.name) }
+            onChannelClick = { ch ->
+                // First tap on a channel: show it in the rail. A tap on the channel that
+                // is ALREADY in the rail: go full screen — the same as tapping the rail
+                // picture. Rows used to be select-only, so a second tap just re-tuned the
+                // rail and the only way to full screen was a programme block, which is
+                // hard to hit. With Preview off there is no rail to preview in, so a tap
+                // goes straight to full screen.
+                //
+                // The check is "is it in the rail", not "is this row selected": the row
+                // selection lives on the grid view, which is rebuilt whenever the page is
+                // rebuilt (e.g. coming back from full screen), so keying off it made the
+                // tap after a return re-tune the same channel instead of enlarging it.
+                if (!previewOn || previewChannel?.id == ch.id) {
+                        playChannel(ch)
+                } else {
+                    selectedChannelId = ch.id
+                    invalidate()
+                    startPreview(ch)
+                }
+            }
+            // One tap on a block plays it full screen; the gutter previews first, then
+            // promotes the same channel to full screen on the second tap.
+            onProgramClick = { ch, _ -> playChannel(ch) }
             onVisibleRangeChanged = { range ->
                 guideQueued = range
                 handler.removeCallbacks(guideDebounce)
@@ -680,19 +819,54 @@ class LegacyCarActivity : CarActivity() {
         // needs real dimensions). begin() already ran, but it centred the timeline
         // on a width of 0, so centring again here lands on the actual "now".
         grid.post {
-            grid.scrollToNow()
+            // A rebuilt page (return from full screen, preview toggled) keeps the offset
+            // it had — landing back at the top of the list on every return was the
+            // complaint. Only a freshly opened guide starts at "now".
+            if (guideScrollValid) {
+                grid.restoreScroll(guideScrollX, guideScrollY)
+            } else {
+                grid.scrollToNow()
+            }
             loadGuide(grid)
         }
         grid.postDelayed({ if (guideGrid === grid) grid.invalidate() }, 250L)
 
-        // Resuming a guide that already had a picture: put the stream back on this
-        // rail's TextureView (the old one was destroyed with the previous page).
-        previewChannel?.let { ch ->
-            if (previewOn) {
-                previewName?.text = ch.name
+        // Coming back from full screen (or re-entering the guide): the stream is
+        // still running but its surface died with the previous page, and detaching
+        // pauses the player — so put it back on THIS rail's TextureView. The resume
+        // is also re-run a beat later: the old TextureView's destroy callback lands
+        // asynchronously and would otherwise clear the surface right after we set it.
+        // Only a channel of this guide may be restored into the rail. If a movie or
+        // episode is what's playing (or anything else), the guide leaves playback
+        // strictly alone — VOD is never restarted by opening the guide.
+        val playing = svc?.currentTitle
+        val resume = (previewChannel ?: lastPlayed)?.takeIf { ch ->
+            playing != null && playing.isNotBlank() && playing == ch.name
+        }
+        if (previewOn && resume != null) {
+            if (resumePreviewOnReturn) {
+                resumePreviewOnReturn = false
+                // Came back from full screen: the stream is still the same one, only its
+                // surface died with the video page. Re-point it at this rail and un-pause
+                // if the detach managed to pause it — never re-tune (a fresh play() would
+                // drop the live connection) and never leave it paused, which is what made
+                // the owner press ▶ Play after every trip into full screen.
+                previewChannel = resume
+                previewName?.text = resume.name
                 previewHint?.visibility = View.GONE
                 attachPreviewSurface()
+                if (svc?.isPlaying() != true) runCatching { svc?.playNow() }
+                grid.postDelayed({ if (guideOpen) attachPreviewSurface() }, 400L)
+            } else if (svc?.currentTitle?.isNotBlank() == true) {
+                previewChannel = resume
+                previewName?.text = resume.name
+                previewHint?.visibility = View.GONE
+                attachPreviewSurface()
+                grid.postDelayed({ if (guideOpen) attachPreviewSurface() }, 400L)
             }
+        } else if (resumePreviewOnReturn) {
+            // Nothing of ours is playing any more — don't leave a stale flag behind.
+            resumePreviewOnReturn = false
         }
         updatePreviewInfo()
         handler.removeCallbacks(previewTicker)
@@ -715,17 +889,26 @@ class LegacyCarActivity : CarActivity() {
         // the picture keeps 16:9 at whatever width the rail ended up
         val cardW = railDp - 20f
         val cardH = cardW * 9f / 16f
+        Log.i(TAG, "guide rail: ${railDp.toInt()}dp wide, card ${cardW.toInt()}x${cardH.toInt()}")
         val card = FrameLayout(this).apply { setBackgroundColor(Color.parseColor("#111A2B")) }
         val tv = TextureView(this)
         tv.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
             override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
-                previewSurface = Surface(st)
+                val mine = Surface(st)
+                railSurface = mine
+                previewSurface = mine
                 attachPreviewSurface()
             }
             override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {}
             override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
-                previewSurface = null
-                runCatching { svc?.setVideoSurface(null) }
+                // This rail's texture dies when the page is replaced — that callback can
+                // land after the next page (video, or a fresh guide rail) already owns the
+                // surface, so only detach if the attached surface is still ours.
+                val mine = railSurface
+                railSurface = null
+                if (previewSurface === mine) previewSurface = null
+                runCatching { svc?.detachVideoSurface(mine) }
+                runCatching { mine?.release() }
                 return true
             }
             override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
@@ -737,6 +920,29 @@ class LegacyCarActivity : CarActivity() {
         }
         card.addView(previewHint, FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        // Tap the picture to watch it full screen — the rail is a preview, not the
+        // show. The children (TextureView / hint) would otherwise swallow the tap.
+        card.isClickable = true
+        // Touch probe: tells us whether a finger on the picture reaches this view at
+        // all, versus reaching it and being swallowed.
+        card.setOnTouchListener { _, e ->
+            if (e.actionMasked == android.view.MotionEvent.ACTION_DOWN) {
+                Log.i(TAG, "preview card ACTION_DOWN")
+            }
+            false
+        }
+        card.setOnClickListener {
+            Log.i(TAG, "preview card tapped (channel=${previewChannel?.name})")
+            previewChannel?.let { playChannel(it) }
+        }
+        tv.setOnClickListener {
+            Log.i(TAG, "preview surface tapped")
+            card.performClick()
+        }
+        previewHint?.setOnClickListener {
+            Log.i(TAG, "preview hint tapped")
+            card.performClick()
+        }
         rail.addView(card, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, dp(cardH.toInt())))
         previewFill = View(this).apply { setBackgroundColor(Palette.ACCENTS[0]) }
@@ -779,6 +985,7 @@ class LegacyCarActivity : CarActivity() {
     /** Play [ch] into the rail instead of full screen. */
     private fun startPreview(ch: Channel) {
         previewChannel = ch
+        lastPlayed = ch
         previewName?.text = ch.name
         previewHint?.visibility = View.GONE
         previewNow?.text = "tuning…"
@@ -1031,16 +1238,25 @@ class LegacyCarActivity : CarActivity() {
         // controls float over a full-window picture.
         val host = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
         val video = TextureView(this)
+        // The surface this view created, held so its own destroy callback can only
+        // detach that one. The destroy callback lands asynchronously and can arrive
+        // after the next page has attached its surface; detaching unconditionally
+        // there paused the stream the new page had just started.
+        var ownedSurface: Surface? = null
         video.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
             override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
                 val surface = Surface(st)
+                ownedSurface = surface
                 val s = svc
                 if (s != null) s.setVideoSurface(surface) else { pendingSurface = surface; bindPlayback() }
             }
             override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {}
             override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
-                pendingSurface = null
-                runCatching { svc?.setVideoSurface(null) }
+                val mine = ownedSurface
+                ownedSurface = null
+                if (pendingSurface === mine) pendingSurface = null
+                runCatching { svc?.detachVideoSurface(mine) }
+                runCatching { mine?.release() }
                 return true
             }
             override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
@@ -1089,6 +1305,39 @@ class LegacyCarActivity : CarActivity() {
                 back()
             }
         })
+        // A/V offset: the car's audio path and its video path buffer differently, so the
+        // amount of correction depends on the head unit. Dial it here, on the picture.
+        val syncLabel = text("", 12.5f, Palette.MUTED, true).apply {
+            setPadding(dp(10), dp(6), dp(2), dp(6))
+        }
+        fun refreshSync() {
+            val ms = svc?.audioDelayMs ?: 0
+            syncLabel.text = "Sync ${ms}ms"
+            syncLabel.setTextColor(if (ms == 0) Palette.MUTED else Palette.ACCENTS[0])
+        }
+        fun nudgeSync(delta: Int) {
+            val s = svc ?: return
+            s.setAudioDelay((s.audioDelayMs + delta).coerceIn(0, 400))
+            refreshSync()
+            Log.i(TAG, "audio delay now ${s.audioDelayMs}ms")
+        }
+        strip.addView(text("A−", 13.5f, Palette.TEXT, true).apply {
+            isClickable = true
+            isFocusable = true
+            setPadding(dp(10), dp(6), dp(6), dp(6))
+            setOnClickListener { nudgeSync(-40) }
+        })
+        strip.addView(syncLabel.apply {
+            isClickable = true
+            setOnClickListener { nudgeSync(40) }
+        })
+        strip.addView(text("A+", 13.5f, Palette.TEXT, true).apply {
+            isClickable = true
+            isFocusable = true
+            setPadding(dp(6), dp(6), dp(10), dp(6))
+            setOnClickListener { nudgeSync(40) }
+        })
+        refreshSync()
         strip.addView(text(title, 13.5f, Palette.MUTED, true).apply {
             gravity = Gravity.END or Gravity.CENTER_VERTICAL
             maxLines = 1
@@ -1294,6 +1543,86 @@ class LegacyCarActivity : CarActivity() {
         }
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+
+    /** Capsule background in the Rogue palette. */
+    private fun capsule(color: Int, radiusDp: Float): android.graphics.drawable.GradientDrawable =
+        android.graphics.drawable.GradientDrawable().apply {
+            setColor(color)
+            cornerRadius = radiusDp * resources.displayMetrics.density
+        }
+
+    /** [color] with [alpha] (0..255) in the top byte. */
+    private fun tint(color: Int, alpha: Int): Int = (color and 0x00FFFFFF) or (alpha shl 24)
+
+    /** Circular initial tile — a logo stand-in tinted from our own hues. */
+    private fun initialsTile(name: String): TextView {
+        val words = name.split(" ", "|", "-", "_").filter { it.isNotBlank() }
+        val initials = words.take(2).mapNotNull { it.firstOrNull()?.uppercaseChar() }
+            .joinToString("").ifBlank { "?" }
+        val hue = Palette.HUES[(name.hashCode() and 0x7fffffff) % Palette.HUES.size]
+        return TextView(this).apply {
+            text = initials
+            textSize = 12f
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            setTextColor(0xFF0B0B10.toInt())
+            gravity = Gravity.CENTER
+            background = android.graphics.drawable.GradientDrawable().apply {
+                shape = android.graphics.drawable.GradientDrawable.OVAL
+                setColor(hue)
+            }
+            layoutParams = LinearLayout.LayoutParams(dp(34), dp(34))
+        }
+    }
+
+    /**
+     * "22:00 – 22:30 · Echo Umbra" plus the fraction through it. Reads the guide cache the
+     * guide page fills, and the small fetches [ensureRowGuide] makes for list rows.
+     */
+    private fun guideLineFor(ch: Channel): Pair<String, Float> {
+        val progs = guideEpg[ch.id].orEmpty()
+        if (progs.isEmpty()) return "Loading guide…" to 0f
+        val now = System.currentTimeMillis()
+        val cur = progs.firstOrNull { it.contains(now) }
+        val next = progs.firstOrNull { it.start >= (cur?.end ?: now) }
+        val text = when {
+            cur != null -> "${timeFmt.format(java.util.Date(cur.start))} – " +
+                "${timeFmt.format(java.util.Date(cur.end))} · ${cur.title}"
+            next != null -> "Next ${timeFmt.format(java.util.Date(next.start))} · ${next.title}"
+            else -> "No guide data"
+        }
+        val frac = if (cur != null) {
+            ((now - cur.start).toFloat() / (cur.end - cur.start).coerceAtLeast(1L)).coerceIn(0f, 1f)
+        } else 0f
+        return text to frac
+    }
+
+    /**
+     * Fetch now/next for the channels in a list page. The guide page loads its own rows;
+     * list rows used to show nothing because nothing ever asked for their guide data.
+     * Bounded and cooled down so scrolling a 1,000-channel list does not hammer the panel.
+     */
+    private fun ensureRowGuide(channels: List<Channel>) {
+        if (guideDisabled || channels.isEmpty()) return
+        val now = System.currentTimeMillis()
+        val todo = channels.asSequence()
+            .filter { it.id !in guideEpg }
+            .filter { (guideRetryAt[it.id] ?: 0L) <= now }
+            .take(14)
+            .toList()
+        if (todo.isEmpty()) return
+        todo.forEach { guideRetryAt[it.id] = now + 60_000L }
+        scope.launch {
+            todo.forEach { ch ->
+                val epg = withContext(Dispatchers.IO) {
+                    runCatching { repo.epgFor(ch) }.getOrNull()
+                }.orEmpty()
+                if (epg.isNotEmpty()) {
+                    guideEpg[ch.id] = epg
+                    withContext(Dispatchers.Main) { rowAdapter?.notifyDataSetChanged() }
+                }
+            }
+        }
+    }
 
     private fun favourites(): Set<String> =
         getSharedPreferences("mytv_favorites", Context.MODE_PRIVATE)

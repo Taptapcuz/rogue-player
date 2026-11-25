@@ -1,5 +1,9 @@
 package com.rogueplayer.ui
 
+import coil.load
+
+import android.text.TextUtils
+
 import android.annotation.SuppressLint
 import android.graphics.Color
 import android.graphics.Typeface
@@ -34,6 +38,7 @@ class BrowseAdapter(
     private val onChannelLong: (Channel) -> Unit = {},
     private val pillCards: Boolean = false,
     private val onGroup: (String) -> Unit = {},
+    private val onScore: (com.rogueplayer.data.ScoreGame) -> Unit = {},
 ) : ListAdapter<BrowseItem, RecyclerView.ViewHolder>(DIFF) {
 
     /** Favourited channel ids — starred rows and long-press handled by the host. */
@@ -46,6 +51,8 @@ class BrowseAdapter(
                 a.e.id == b.e.id && a.isMovie == b.isMovie
             a is BrowseItem.SectionTitle && b is BrowseItem.SectionTitle -> a.text == b.text
             a is BrowseItem.EpisodeItem && b is BrowseItem.EpisodeItem -> a.ep.id == b.ep.id
+            a is BrowseItem.ScoreCard && b is BrowseItem.ScoreCard ->
+                a.g.league == b.g.league && a.g.home == b.g.home && a.g.away == b.g.away
             else -> a::class == b::class && a.toString() == b.toString()
         }
 
@@ -54,12 +61,37 @@ class BrowseAdapter(
 
     var accent: Int = Palette.ACCENTS[0]
 
+    /**
+     * Helmet colours for score cards. Palette.HUES is tuned for guide blocks, where a row of
+     * similar blues is fine — on two helmets side by side it read as the same colour. These
+     * eight are deliberately far apart in hue and lightness.
+     */
+    private val SCORE_HUES = intArrayOf(
+        0xFFFF9F1C.toInt(), 0xFF4EA8DE.toInt(), 0xFF9B5DE5.toInt(), 0xFF2EC4B6.toInt(),
+        0xFFE86A92.toInt(), 0xFFB5C94B.toInt(), 0xFFF2C14E.toInt(), 0xFF8C7BFF.toInt(),
+    )
+
+    private fun scoreHue(name: String) = SCORE_HUES[(name.hashCode() and 0x7fffffff) % SCORE_HUES.size]
+
+    /** Two clearly different colours for the two sides of a card. */
+    private fun scoreHues(g: com.rogueplayer.data.ScoreGame): Pair<Int, Int> {
+        val away = scoreHue(g.away)
+        val homeRaw = scoreHue(g.home)
+        val home = if (homeRaw == away) {
+            SCORE_HUES[(SCORE_HUES.indexOf(away) + 3) % SCORE_HUES.size]
+        } else {
+            homeRaw
+        }
+        return away to home
+    }
+
     override fun getItemViewType(position: Int): Int = when (val item = getItem(position)) {
         is BrowseItem.ChannelCard -> TYPE_CHANNEL
         is BrowseItem.PosterCard -> if (compactPosters) TYPE_POSTER_ROW else TYPE_POSTER_TILE
         is BrowseItem.SectionTitle -> TYPE_SECTION
         is BrowseItem.EpisodeItem -> TYPE_EPISODE
         is BrowseItem.GroupRow -> TYPE_GROUP
+        is BrowseItem.ScoreCard -> TYPE_SCORE
         is BrowseItem.Message -> TYPE_MESSAGE
         else -> TYPE_MESSAGE
     }
@@ -89,6 +121,7 @@ class BrowseAdapter(
             is BrowseItem.SectionTitle -> renderSectionTitle(holder.itemView, item)
             is BrowseItem.EpisodeItem -> renderEpisodeRow(holder.itemView, item)
             is BrowseItem.GroupRow -> renderGroupRow(holder.itemView, item.group, item.count)
+            is BrowseItem.ScoreCard -> renderScoreCard(holder.itemView, item.g)
             is BrowseItem.Message -> (holder.itemView as TextView).apply {
                 text = item.text; setTextColor(Palette.MUTED); textSize = 13f; gravity = Gravity.CENTER
             }
@@ -472,6 +505,252 @@ class BrowseAdapter(
     // --------------------------------------------------- section header ---
 
     /**
+     * Game card: status + broadcast pill on top, away and home with their scores, and a
+     * quiet footer. Team tiles are tinted from OUR hue palette by name — no club colours
+     * and no logos, so nothing here borrows a team's marks.
+     */
+    @SuppressLint("SetTextI18n")
+    private fun renderScoreCard(v: View, g: com.rogueplayer.data.ScoreGame) {
+        val card = v as FrameLayout
+        card.removeAllViews()
+        val ctx = card.context
+        card.setBackground(rounded(card, Palette.CARD, 18))
+        // A finished game does not need a three-line card: collapse it to one line.
+        if (g.completed) {
+            renderFinalCard(card, g)
+            return
+        }
+        card.setPadding(dp(card, 12), dp(card, 10), dp(card, 12), dp(card, 10))
+        val col = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
+        card.addView(col)
+
+        val top = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        top.addView(TextView(ctx).apply {
+            text = if (g.live) "\u25CF LIVE" else g.status
+            textSize = 10.5f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(
+                when {
+                    g.live -> 0xFFFF6B6B.toInt()
+                    g.completed -> Palette.DIM
+                    else -> Palette.TEXT
+                },
+            )
+        })
+        g.detail?.let {
+            top.addView(TextView(ctx).apply {
+                text = "  $it"
+                textSize = 11f
+                setTextColor(Palette.MUTED)
+                setTypeface(null, Typeface.BOLD)
+            })
+        }
+        top.addView(View(ctx), LinearLayout.LayoutParams(0, 1, 1f))
+        g.broadcasts.firstOrNull()?.let { bc ->
+            top.addView(TextView(ctx).apply {
+                text = bc
+                textSize = 11.5f
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(accent)
+                setPadding(dp(card, 10), dp(card, 4), dp(card, 10), dp(card, 4))
+                background = android.graphics.drawable.GradientDrawable().apply {
+                    cornerRadius = dp(card, 20).toFloat()
+                    setColor((accent and 0x00FFFFFF) or (0x26 shl 24))
+                }
+            })
+        }
+        col.addView(top, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
+        // Two teams, two hues: hashing the name alone collided often enough that both
+        // helmets came out the same colour on a card.
+        val (awayHue, homeHue) = scoreHues(g)
+        addTeamLine(card, col, g.away, g.awayAbbr, g.awayScore, g, true, awayHue)
+        addTeamLine(card, col, g.home, g.homeAbbr, g.homeScore, g, false, homeHue)
+
+        col.addView(TextView(ctx).apply {
+            text = listOfNotNull(g.league, g.note?.takeIf { it.length < 28 }).joinToString(" \u00B7 ")
+            textSize = 10.5f
+            setTextColor(Palette.DIM)
+            setPadding(0, dp(card, 5), 0, 0)
+        })
+        card.setOnClickListener { onScore(g) }
+    }
+
+    /**
+     * FINAL card: one compact line — away helmet and score, home score and helmet, FINAL and
+     * the broadcast. Half the height of a live card, so a finished slate scans like a list
+     * of results instead of a stack of tickets.
+     */
+    @SuppressLint("SetTextI18n")
+    private fun renderFinalCard(card: FrameLayout, g: com.rogueplayer.data.ScoreGame) {
+        val ctx = card.context
+        card.setPadding(dp(card, 12), dp(card, 6), dp(card, 12), dp(card, 6))
+        val (awayHue, homeHue) = scoreHues(g)
+
+        fun score(txt: String?, leading: Boolean) = TextView(ctx).apply {
+            text = txt ?: "\u2013"
+            textSize = 18f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(if (leading) Palette.TEXT else Palette.DIM)
+        }
+
+        // Hockey and baseball badges are shapes, not letter tiles, so their
+        // abbreviations go beside the score.
+        val hockey = g.league.uppercase().let { it == "NHL" || it == "MLB" }
+        fun abbrTag(txt: String) = TextView(ctx).apply {
+            text = txt
+            textSize = 10.5f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Palette.MUTED)
+        }
+
+        val row = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        row.addView(
+            teamMark(ctx, g.away, g.awayAbbr, awayHue, g.league, g.awayLogo, 34) { dp(card, it) },
+        )
+        // Crossed sticks cannot carry three letters, so hockey shows the abbreviation
+        // beside the score instead.
+        if (hockey) {
+            row.addView(abbrTag(g.awayAbbr.take(3)), LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { leftMargin = dp(card, 8) })
+        }
+        val a = score(g.awayScore, true)
+        row.addView(a, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { leftMargin = if (hockey) dp(card, 4) else dp(card, 8) })
+        row.addView(TextView(ctx).apply {
+            text = " \u2013 "
+            textSize = 15f
+            setTextColor(Palette.DIM)
+        })
+        row.addView(score(g.homeScore, false))
+        if (hockey) {
+            row.addView(abbrTag(g.homeAbbr.take(3)), LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { leftMargin = dp(card, 4) })
+        }
+        row.addView(
+            teamMark(ctx, g.home, g.homeAbbr, homeHue, g.league, g.homeLogo, 34) { dp(card, it) }
+                .also { (it.layoutParams as LinearLayout.LayoutParams).leftMargin = dp(card, 8) },
+        )
+        row.addView(View(ctx), LinearLayout.LayoutParams(0, 1, 1f))
+        row.addView(TextView(ctx).apply {
+            text = "FINAL"
+            textSize = 10f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Palette.DIM)
+        })
+        g.broadcasts.firstOrNull()?.let { bc ->
+            row.addView(TextView(ctx).apply {
+                text = bc
+                textSize = 10.5f
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(accent)
+                setPadding(dp(card, 8), dp(card, 3), dp(card, 8), dp(card, 3))
+                background = android.graphics.drawable.GradientDrawable().apply {
+                    cornerRadius = dp(card, 20).toFloat()
+                    setColor((accent and 0x00FFFFFF) or (0x26 shl 24))
+                }
+            }, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { leftMargin = dp(card, 8) })
+        }
+        card.addView(row)
+        card.setOnClickListener { onScore(g) }
+    }
+
+    /**
+     * Team mark for a score card: the ESPN logo when it loads, our own sport badge
+     * underneath when it doesn't (offline, feed change, missing art). Nothing is drawn
+     * if both fail — never a broken image box.
+     */
+    private fun teamMark(
+        ctx: android.content.Context,
+        name: String,
+        abbr: String,
+        hue: Int,
+        league: String,
+        logoUrl: String?,
+        sizeDp: Int,
+        dp: (Int) -> Int,
+    ): android.view.View {
+        val holder = FrameLayout(ctx)
+        val badge = TeamBadge(ctx, abbr.take(3).ifBlank { name.take(2) }, hue, league)
+        holder.addView(badge, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        if (!logoUrl.isNullOrBlank()) {
+            val img = android.widget.ImageView(ctx).apply {
+                scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+            }
+            holder.addView(img, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+            img.load(logoUrl) {
+                listener(
+                    onSuccess = { _, _ -> badge.visibility = android.view.View.GONE },
+                    onError = { _, _ -> holder.removeView(img) },
+                )
+            }
+        }
+        holder.layoutParams = LinearLayout.LayoutParams(dp(sizeDp), dp(sizeDp))
+        return holder
+    }
+
+    /** One team line: neutral initials tile, name, score. */
+    @SuppressLint("SetTextI18n")
+    private fun addTeamLine(
+        card: View,
+        col: LinearLayout,
+        name: String,
+        abbr: String,
+        score: String?,
+        g: com.rogueplayer.data.ScoreGame,
+        isAway: Boolean,
+        hue: Int,
+    ) {
+        val ctx = card.context
+        val row = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(card, 4), 0, 0)
+        }
+        row.addView(
+            teamMark(
+                ctx, name, abbr, hue, g.league,
+                if (isAway) g.awayLogo else g.homeLogo,
+                30,
+            ) { dp(card, it) },
+        )
+        row.addView(TextView(ctx).apply {
+            text = name
+            textSize = 14.5f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Palette.TEXT)
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            .apply { leftMargin = dp(card, 10) })
+        val other = if (isAway) g.homeScore else g.awayScore
+        val leading = score != null && other != null &&
+            (score.toIntOrNull() ?: 0) > (other.toIntOrNull() ?: 0)
+        row.addView(TextView(ctx).apply {
+            text = score ?: "\u2013"
+            textSize = 19f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(if (leading || (!g.live && !g.completed)) Palette.TEXT else Palette.DIM)
+        })
+        col.addView(row, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+    }
+
+    /**
      * Bold title + blue underline on the left, item count in a filled accent
      * pill on the right. The count is the point, so it gets its own chip
      * instead of a 12sp muted line.
@@ -536,6 +815,13 @@ class BrowseAdapter(
                 layoutParams = RecyclerView.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, dp(parent, 60))
             }
+            TYPE_SCORE -> FrameLayout(parent.context).apply {
+                layoutParams = RecyclerView.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    topMargin = dp(parent, 4)
+                    bottomMargin = dp(parent, 6)
+                }
+            }
             TYPE_SECTION -> LinearLayout(parent.context).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(parent, 4), (18 * d).toInt(), dp(parent, 4), (12 * d).toInt())
@@ -592,5 +878,6 @@ class BrowseAdapter(
         const val TYPE_POSTER_ROW = 6
         const val TYPE_EPISODE = 7
         const val TYPE_GROUP = 8
+        const val TYPE_SCORE = 9
     }
 }

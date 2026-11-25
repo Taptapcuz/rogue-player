@@ -109,6 +109,10 @@ class MainActivity : AppCompatActivity() {
     private var scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     private val onClickChannel: (Channel) -> Unit = { ch -> startPlayback(ch.url, ch.name, 0) }
+
+    /** Last score slate, refreshed behind the Sports tab; read while building the page. */
+    @Volatile private var scoreGames: List<com.rogueplayer.data.ScoreGame> = emptyList()
+    private var scoreFetchAt = 0L
     private val onClickEntry: (Entry, Boolean) -> Unit = { e, isMovie ->
         // A poster tap opens the detail page (art, plot, cast, trailer, Play) instead
         // of jumping straight into the stream. Series pick their episode there too —
@@ -914,6 +918,7 @@ class MainActivity : AppCompatActivity() {
             onChannelLong = { ch -> toggleFavorite(ch) },
             pillCards = resources.getBoolean(R.bool.rp_pill_cards),
             onGroup = { g -> openSportGroup(g) },
+            onScore = { g -> openScore(g) },
         ).apply { favoriteIds = favorites.toSet() }
         val list = RecyclerView(this).apply {
             clipToPadding = false
@@ -924,7 +929,9 @@ class MainActivity : AppCompatActivity() {
         lm.spanSizeLookup = object : GridLayoutManager.SpanSizeLookup() {
             override fun getSpanSize(position: Int): Int {
                 val item = adapter.currentList.getOrNull(position)
-                return if (item is BrowseItem.SectionTitle || item is BrowseItem.Message) span else 1
+                return if (item is BrowseItem.SectionTitle || item is BrowseItem.Message ||
+                    item is BrowseItem.ScoreCard
+                ) span else 1
             }
         }
         list.layoutManager = lm
@@ -1001,6 +1008,75 @@ class MainActivity : AppCompatActivity() {
         row.animate().translationY(0f).alpha(1f).setDuration(180).start()
     }
 
+    /**
+     * Pull the score slate behind the Sports tab and reload the page when it changes.
+     * Throttled so tab-flipping does not stack requests; ScoreSource also caches for a
+     * minute and keeps the last good slate when the network fails.
+     */
+    /**
+     * Which leagues a sport category is about, from its group name and the channels in it
+     * ("US | NFL Games" → NFL; a hockey group → NHL). Empty when nothing in the group names
+     * a league, so the caller can fall back to the broadcast.
+     */
+    private fun leaguesForCategory(group: String?, channels: List<Channel>): Set<String> {
+        val hay = buildString {
+            append(group.orEmpty())
+            append(' ')
+            channels.take(40).forEach { append(it.name).append(' ') }
+        }.uppercase()
+        val out = LinkedHashSet<String>()
+        if (Regex("\\bNFL\\b").containsMatchIn(hay)) out += "NFL"
+        if (hay.contains("COLLEGE FOOTBALL") || Regex("\\bNCAAF\\b").containsMatchIn(hay)) out += "NCAAF"
+        if (Regex("\\bNBA\\b").containsMatchIn(hay)) out += "NBA"
+        if (hay.contains("NCAAB") || hay.contains("COLLEGE BASKETBALL")) out += "NCAAB"
+        if (Regex("\\bMLB\\b").containsMatchIn(hay)) out += "MLB"
+        if (Regex("\\bNHL\\b").containsMatchIn(hay)) out += "NHL"
+        return out
+    }
+
+    private fun gamesLabel(n: Int) = if (n == 1) "1 game" else "$n games"
+
+    private fun refreshScores() {
+        val now = System.currentTimeMillis()
+        if (now - scoreFetchAt < 30_000L) return
+        scoreFetchAt = now
+        scope.launch {
+            val slate = com.rogueplayer.data.ScoreSource.slate()
+            if (slate != scoreGames) {
+                scoreGames = slate
+                reload()
+            }
+        }
+    }
+
+    /**
+     * A tap on a game card: find the channels carrying that broadcast and play the single
+     * match, offer the list when several match, and say so when none do — never open a
+     * stream that has nothing to do with the game.
+     */
+    private fun openScore(g: com.rogueplayer.data.ScoreGame) {
+        val channels = app.repository.activePlaylist?.channels.orEmpty()
+        if (channels.isEmpty()) {
+            toast("Load a source first")
+            return
+        }
+        val hits = channels.filter { ch ->
+            g.broadcasts.any { b -> ch.name.uppercase().contains(b.uppercase()) }
+        }
+        when {
+            hits.size == 1 -> onClickChannel(hits[0])
+            hits.size > 1 -> androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("${g.away} at ${g.home}")
+                .setItems(hits.take(12).map { it.name }.toTypedArray()) { _, i ->
+                    onClickChannel(hits[i])
+                }
+                .show()
+            else -> toast(
+                "No channel for " + (g.broadcasts.firstOrNull() ?: "this game") + " in your playlist",
+            )
+        }
+    }
+
     private fun reload() {
         // The /Home landing has no list/tvPlaceholder, so there's nothing to build.
         if (tab == Tab.HOME) return
@@ -1024,6 +1100,7 @@ class MainActivity : AppCompatActivity() {
         // what made taps time out (ANR "Input dispatching timed out" in
         // MainActivity). Build it on a single background thread, and drop the
         // result if another reload started meanwhile.
+        if (tab == Tab.SPORTS) refreshScores()
         val gen = ++reloadGen
         val tabNow = tab
         val filterNow = selectedGroup
@@ -1104,11 +1181,42 @@ class MainActivity : AppCompatActivity() {
                         val n = channels.count { it.group == g && it.group !in hiddenGroups }
                         BrowseItem.GroupRow(g, n) as BrowseItem
                     }
-                    listOf(BrowseItem.SectionTitle("Sports Categories",
+                    // Landing shows ONLY games in progress. Upcoming and finished games
+                    // live inside the sport categories, so the landing stays a "what's on
+                    // right now" screen and is empty of scores when nothing is playing.
+                    val scores = scoreGames.filter { it.live }
+                    val scoreSection: List<BrowseItem> = if (scores.isEmpty()) {
+                        emptyList()
+                    } else {
+                        listOf(BrowseItem.SectionTitle("Scores", gamesLabel(scores.size)) as BrowseItem) +
+                            scores.take(12).map { BrowseItem.ScoreCard(it) as BrowseItem }
+                    }
+                    scoreSection + listOf(BrowseItem.SectionTitle("Sports Categories",
                         "${Titles.count(sportGroups.size)} groups") as BrowseItem) + rows
                 } else {
-                    // Inside a group: show its channels.
-                    listOf(BrowseItem.SectionTitle(filter,
+                    // Inside a sport category: the games this category can actually show
+                    // first (its channels carry the broadcast), then its channels.
+                    // Inside a category you get what is still to come and what finished —
+                    // never a live game (those are the landing's job). A category shows the
+                    // slate for the SPORT it covers (an "NFL Games" group shows NFL), and
+                    // falls back to broadcast matching when the group names no league.
+                    val leagues = leaguesForCategory(filter, chans)
+                    val catGames = scoreGames.filter { g ->
+                        !g.live && (
+                            (leagues.isNotEmpty() && g.league in leagues) ||
+                                g.broadcasts.any { b ->
+                                    chans.any { ch -> ch.name.uppercase().contains(b.uppercase()) }
+                                }
+                            )
+                    }
+                    val scores: List<BrowseItem> = if (catGames.isEmpty()) {
+                        emptyList()
+                    } else {
+                        listOf(BrowseItem.SectionTitle("Scores",
+                            gamesLabel(catGames.size)) as BrowseItem) +
+                            catGames.take(8).map { BrowseItem.ScoreCard(it) as BrowseItem }
+                    }
+                    scores + listOf(BrowseItem.SectionTitle(filter,
                         "${Titles.count(chans.size)} channels") as BrowseItem) +
                         chans.map { BrowseItem.ChannelCard(it) as BrowseItem }
                 }
