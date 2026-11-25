@@ -54,8 +54,20 @@ val bakedPanel = Properties().apply {
     val f = rootProject.file("baked.properties")
     if (f.exists()) f.inputStream().use { load(it) }
 }
-fun baked(key: String): String =
-    if (withPanel && withAccount) bakedPanel.getProperty(key).orEmpty() else ""
+// The host and the login are gated differently ON PURPOSE:
+//   -PwithPanel            puts the panel ADDRESS in, nothing else. This is the build customers
+//                          get: the Rogue TV tab knows where to connect and asks them only for
+//                          their own username and password.
+//   -PwithPanel -PwithAccount  additionally bakes the owner's own login, so the source seeds
+//                          itself on his device. Never handed out.
+// Gating the host on withAccount (as this did) made "-PwithPanel" produce a byte-identical copy
+// of the public build — right flags, no panel, nothing on screen to say so.
+fun baked(key: String): String = when {
+    !withPanel -> ""
+    key == "host" -> bakedPanel.getProperty("host").orEmpty()
+    withAccount -> bakedPanel.getProperty(key).orEmpty()
+    else -> ""
+}
 println("[baked] panel=" + withPanel + " account=" + withAccount +
     " host=" + (if (baked("host").isNotEmpty()) "<set>" else "<none>") +
     " login=" + (if (baked("user").isNotEmpty()) "<set>" else "<none>"))
@@ -217,7 +229,7 @@ tasks.matching { it.name == "assembleLegacyRelease" }.configureEach {
             else -> "public"
         }
         val dir = rootProject.layout.projectDirectory.dir("dist").asFile.apply { mkdirs() }
-        val dest = java.io.File(dir, "rogue-" + kind + "-" + buildVersionName + ".apk")
+        val dest = dir.resolve("rogue-" + kind + "-" + buildVersionName + ".apk")
         apk.copyTo(dest, overwrite = true)
         println("[dist] " + kind + " -> " + dest.absolutePath)
     }

@@ -94,17 +94,22 @@ planned. This covers live TV, VOD and series from one subscription, an EPG guide
 
 ## Builds
 
-One codebase, three ways to build it. Which login types appear is decided by what you bake,
-not by a separate branch:
+One codebase, three builds. What gets baked in — not a branch — decides what the login offers:
 
-| build | command | what the login offers |
-|---|---|---|
-| free / public | `gradlew assembleLegacyRelease` | M3U + Xtream — nothing baked in |
-| customer | `gradlew assembleLegacyRelease -PappId=com.rogueplayer.tv` | the same app under its own package, so it installs alongside |
-| owner | `gradlew assembleLegacyRelease -PwithPanel -PwithAccount` | adds a Rogue TV tab that reads a gitignored `baked.properties` |
+| build | command | baked in | login offers |
+|---|---|---|---|
+| **public** (this repo's release) | `gradlew assembleLegacyRelease` | nothing | M3U + Xtream |
+| **customer** | `gradlew assembleLegacyRelease -PwithPanel` | the panel address | M3U + Xtream + Rogue TV, where the customer types only their username and password |
+| **owner** | `gradlew assembleLegacyRelease -PwithPanel -PwithAccount` | the address and one login | the same three, seeding itself |
+
+Every release build also drops a named copy in `dist/` — `rogue-public-<ver>.apk`,
+`rogue-customer-<ver>.apk`, `rogue-owner-<ver>.apk` — because all three otherwise write the same
+`app-legacy-release.apk`, and a filename that can't disagree with its contents is cheaper than
+remembering.
 
 `baked.properties` and `keystore.properties` are gitignored, so a clone can only produce the
-free build. `versionCode` is the git commit count; `versionName` is `1.0.<count>-<flavour>`.
+public build. `-PappId=` gives a build its own package so it installs alongside another.
+`versionCode` is the git commit count; `versionName` is `1.0.<count>`.
 
 ---
 
