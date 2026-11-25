@@ -161,6 +161,15 @@ class MainActivity : AppCompatActivity() {
         // first frame can legitimately have no playlist yet. Repaint when they land.
         scope.launch {
             app.repository.loadState.first { it }
+            // A build that knows the panel address but carries no login (a customer build) has
+            // nothing to show until somebody signs in, so open on the sources screen instead of
+            // an empty landing. Builds that seed their own login keep the normal start.
+            if (app.repository.playlists.value.isEmpty() &&
+                !com.rogueplayer.data.BakedSource.autoSeed
+            ) {
+                tab = Tab.PLAYLISTS
+                selectedGroup = null
+            }
             renderContent()
             renderNav()
             reload()
@@ -2172,6 +2181,12 @@ class MainActivity : AppCompatActivity() {
                             val name = nameEdit.text.toString().trim()
                             val host = if (mode == 2) com.rogueplayer.data.BakedSource.base()
                                        else hostEdit.text.toString().trim()
+                            // Rogue TV supplies the address, never the account: the fields are
+                            // the customer's own login and both are required.
+                            if (mode != 0 && (userEdit.text.isBlank() || passEdit.text.isBlank())) {
+                                toast("Enter your username and password")
+                                return@launch
+                            }
                             val src = if (mode != 0) {
                                 PlaylistParser.load(PlaylistKind.XTREAM,
                                     host,

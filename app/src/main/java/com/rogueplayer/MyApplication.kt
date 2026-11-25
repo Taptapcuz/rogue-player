@@ -44,7 +44,9 @@ class MyApplication : Application() {
      * Only builds produced with a local `baked.properties` have a portal at all.
      */
     private fun seedBakedSource() {
-        if (!BakedSource.enabled) return
+        // No baked login (a customer build): there is nothing to seed, and nothing of the
+        // owner's should ever be written into somebody else's app.
+        if (!BakedSource.autoSeed) return
         val seedPrefs = getSharedPreferences("mytv_seed", MODE_PRIVATE)
         if (seedPrefs.getBoolean(SEED_DONE, false)) return
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {

@@ -25,8 +25,18 @@ object BakedSource {
     private val USER = BuildConfig.BAKED_USER.trim()
     private val PASS = BuildConfig.BAKED_PASS.trim()
 
-    /** True when this build carries a baked portal at all. */
-    val enabled: Boolean get() = HOST.isNotBlank() && USER.isNotBlank()
+    /**
+     * True when this build knows the panel's address — enough to offer the "Rogue TV" tab, so
+     * a customer only types a username and password.
+     */
+    val enabled: Boolean get() = HOST.isNotBlank()
+
+    /**
+     * True only when a full login is baked in as well (`-PwithAccount`). Gates the automatic
+     * seeding: a customer build knows where the panel is but must never create a source with
+     * somebody else's account.
+     */
+    val autoSeed: Boolean get() = HOST.isNotBlank() && USER.isNotBlank() && PASS.isNotBlank()
 
     private fun bare(): String =
         HOST.removePrefix("https://").removePrefix("http://").trimEnd('/')

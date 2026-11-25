@@ -8,19 +8,30 @@ plugins {
 //
 // TWO KINDS OF BUILD, one codebase:
 //
-//   public    (the free GitHub APK)  — login offers M3U link + Xtream only.
-//   customer  (-PwithPanel)          — the same app plus a "Rogue TV" tab that logs into the
-//                                      panel in baked.properties, so a customer only types
-//                                      their username/password.
+//   public    (the free GitHub APK)    — login offers M3U link + Xtream only.
+//   customer  (-PwithPanel)            — adds a "Rogue TV" tab that knows the panel address;
+//                                        the customer types THEIR OWN username/password.
+//   own       (-PwithPanel -PwithAccount) — additionally bakes the owner's own login so the
+//                                        source seeds itself. Never hand this one out.
 //
 // baked.properties is gitignored, so a clean clone can only produce the public build. The
 // switch is opt-in ON PURPOSE: this machine always has that file, so a default-on panel
 // would quietly put the portal inside every APK built here — including a public one.
 //
-//   gradlew assembleLegacyRelease                 → public   (2 login types)
-//   gradlew assembleLegacyRelease -PwithPanel      → customer (3 login types)
+// Credentials are opt-in ON TOP of that, for the same reason: forgetting -PwithPanel gives a
+// build with no panel at all, and forgetting -PwithAccount gives a build with the address but
+// nobody's login in it. Both failure modes are safe; the reverse would hand out an account.
+//
+//   gradlew assembleLegacyRelease                          → public   (2 login types)
+//   gradlew assembleLegacyRelease -PwithPanel               → customer (3 login types, host only)
+//   gradlew assembleLegacyRelease -PwithPanel -PwithAccount → own      (seeds the owner's login)
 //
 val withPanel = providers.gradleProperty("withPanel").isPresent
+// The panel *address* and a *login* are two separate bundles of secrets: customers need the
+// first, only the owner's own device needs the second.
+// `-PwithAccount` (bare) and `-PwithAccount=true` both count; `-PwithAccount=false` turns it off.
+val withAccountProp: String? = providers.gradleProperty("withAccount").orNull
+val withAccount = withPanel && withAccountProp != null && withAccountProp != "false"
 
 // ---------------------------------------------------------------- version + package identity --
 //
@@ -43,7 +54,15 @@ val bakedPanel = Properties().apply {
     val f = rootProject.file("baked.properties")
     if (f.exists()) f.inputStream().use { load(it) }
 }
-fun baked(key: String): String = if (withPanel) bakedPanel.getProperty(key).orEmpty() else ""
+fun baked(key: String): String = when {
+    !withPanel -> ""
+    key == "host" -> bakedPanel.getProperty("host").orEmpty()
+    withAccount -> bakedPanel.getProperty(key).orEmpty()
+    else -> ""
+}
+println("[baked] panel=" + withPanel + " account=" + withAccount +
+    " host=" + (if (baked("host").isNotEmpty()) "<set>" else "<none>") +
+    " login=" + (if (baked("user").isNotEmpty()) "<set>" else "<none>"))
 
 // Release signing comes from keystore.properties (also gitignored): storeFile, storePassword,
 // keyAlias, keyPassword. Kept out of the repo on purpose — the key is the app's identity, and
