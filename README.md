@@ -2,6 +2,13 @@
 
 **An ad-free IPTV player for the phone and for Android Auto — built for personal use.**
 
+[![Download](https://img.shields.io/badge/download-1.0.62-3d7bff?style=flat-square)](https://github.com/Taptapcuz/rogue-player/releases/latest)
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-3d7bff?style=flat-square)](LICENSE)
+![Platform](https://img.shields.io/badge/Android-10%2B-3d7bff?style=flat-square)
+
+**[Download the latest APK](https://github.com/Taptapcuz/rogue-player/releases/latest)** — one file,
+phone and Android Auto. No account, no sign-up, nothing of mine in it.
+
 Rogue Player plays *your own* IPTV subscription (M3U or Xtream Codes) on your phone and, in
 **Android Auto**, on the car's screen. It is not a content app: it ships no channels,
 playlists or streams. You bring your own (legal) source.
