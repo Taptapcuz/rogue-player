@@ -196,3 +196,29 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
 }
+
+
+// ---------------------------------------------------------------- named copies, so the file --#
+// tells you which build it is. Both kinds write the same app-legacy-release.apk, which made it
+// possible to hand out (or install) the wrong one. Each release build now also lands in
+// <root>/dist/ under a name that states its kind and version:
+//
+//   dist/rogue-public-1.0.62.apk    M3U + Xtream, nothing baked — this is what GitHub gets
+//   dist/rogue-customer-1.0.62.apk  + Rogue TV tab (address only, customer types their login)
+//   dist/rogue-owner-1.0.62.apk     + the owner's own login baked in — never handed out
+tasks.matching { it.name == "assembleLegacyRelease" }.configureEach {
+    doLast {
+        val apk = layout.buildDirectory.file("outputs/apk/legacy/release/app-legacy-release.apk")
+            .get().asFile
+        if (!apk.exists()) return@doLast
+        val kind = when {
+            withAccount -> "owner"
+            withPanel -> "customer"
+            else -> "public"
+        }
+        val dir = rootProject.layout.projectDirectory.dir("dist").asFile.apply { mkdirs() }
+        val dest = java.io.File(dir, "rogue-" + kind + "-" + buildVersionName + ".apk")
+        apk.copyTo(dest, overwrite = true)
+        println("[dist] " + kind + " -> " + dest.absolutePath)
+    }
+}
