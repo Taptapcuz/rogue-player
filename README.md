@@ -132,6 +132,10 @@ public build. `-PappId=` gives a build its own package so it installs alongside 
 If the car app doesn't appear immediately, unplug and re-plug the phone, or restart the phone
 once after the first install.
 
+If the device refuses the APK — the installer says it can't install, or nothing happens after
+tapping it — use **KingInstaller** to push the same file. Nothing needs rebuilding for that: it is
+the system installer being picky, not the APK.
+
 ---
 
 ## License
