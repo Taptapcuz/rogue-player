@@ -11,6 +11,7 @@ import android.util.Log
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
@@ -486,7 +487,8 @@ class PlaybackService : Service() {
     }
 
     private fun buildMediaSource(url: String): MediaSource {
-        val item = MediaItem.fromUri(Uri.parse(url))
+        val uri = Uri.parse(url)
+        val item = MediaItem.fromUri(uri)
         val isHls = url.contains(".m3u8", ignoreCase = true)
         // VOD on this provider 302s every request to another host (a plain IP), and Media3's
         // DefaultHttpDataSource (HttpURLConnection) surfaced that as
@@ -495,12 +497,18 @@ class PlaybackService : Service() {
         val httpFactory = OkHttpDataSource.Factory(streamClient)
             .setUserAgent(com.rogueplayer.data.HttpAgent.UA)
             .setDefaultRequestProperties(com.rogueplayer.data.HttpAgent.STREAM_HEADERS)
-        return if (isHls && com.rogueplayer.ui.UiSettings.forceHls(this)) {
-            HlsMediaSource.Factory(httpFactory)
-                .setAllowChunklessPreparation(true)
-                .createMediaSource(item)
-        } else {
-            DefaultMediaSourceFactory(httpFactory).createMediaSource(item)
+        return when {
+            isHls && com.rogueplayer.ui.UiSettings.forceHls(this) ->
+                HlsMediaSource.Factory(httpFactory)
+                    .setAllowChunklessPreparation(true)
+                    .createMediaSource(item)
+            // A local file (the car's Videos page plays the phone's own videos): the
+            // OkHttp-only factory threw "Malformed URL" on content:// URIs, so local
+            // sources go through DefaultDataSource, which resolves content/file itself.
+            uri.scheme == "content" || uri.scheme == "file" ->
+                DefaultMediaSourceFactory(DefaultDataSource.Factory(this, httpFactory))
+                    .createMediaSource(item)
+            else -> DefaultMediaSourceFactory(httpFactory).createMediaSource(item)
         }
     }
 

@@ -6,6 +6,12 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- Mic for in-car web voice search (WebView getUserMedia), like CarStream. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- The car's Videos page lists the phone's own video library (MediaStore).
+         Requested at runtime from the car page; the dialog lands on the phone. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
 
     <!-- Android Auto / Android for Cars projection surface -->
     <uses-permission android:name="androidx.car.app.ACCESS_SURFACE" />

@@ -156,6 +156,7 @@ class MainActivity : AppCompatActivity() {
         loadFavorites()
         installBackHandler()
         buildChrome()
+        maybeAskForVideoLibrary()
         // Sources are parsed off-thread now (see PlaylistRepository.init), so the
         // first frame can legitimately have no playlist yet. Repaint when they land.
         scope.launch {
@@ -163,6 +164,48 @@ class MainActivity : AppCompatActivity() {
             renderContent()
             renderNav()
             reload()
+        }
+    }
+
+    /**
+     * The car's Videos page lists the phone's own video library, which needs
+     * READ_MEDIA_VIDEO. A hosted car activity cannot raise that dialog (the projection
+     * SDK's CarActivity is a ContextWrapper, not an Activity — javap on aauto-sdk 4.5),
+     * so it is asked here, once, on first launch, the way a gallery app would. The
+     * "asked" flag means a declined prompt is not a nag; the car page points at
+     * Settings instead.
+     */
+    private fun maybeAskForVideoLibrary() {
+        val perm = if (android.os.Build.VERSION.SDK_INT >= 33) {
+            android.Manifest.permission.READ_MEDIA_VIDEO
+        } else {
+            android.Manifest.permission.READ_EXTERNAL_STORAGE
+        }
+        if (checkSelfPermission(perm) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            ensureRecordingFolder()
+            return
+        }
+        val prefs = getSharedPreferences("mytv_videos", MODE_PRIVATE)
+        if (prefs.getBoolean("asked", false)) return
+        prefs.edit().putBoolean("asked", true).apply()
+        android.util.Log.i("MYTVVideos", "first launch: asking for $perm")
+        runCatching { requestPermissions(arrayOf(perm), 4711) }
+            .onFailure { android.util.Log.w("MYTVVideos", "request failed", it) }
+    }
+
+    /**
+     * Once access is allowed, make `Movies/Rogue Player/Recordings` exist on the phone (the
+     * gallery album recordings belong in). Runs once per process, off the main thread.
+     */
+    private var recordingFolderChecked = false
+
+    private fun ensureRecordingFolder() {
+        if (recordingFolderChecked) return
+        recordingFolderChecked = true
+        android.util.Log.i("MYTVVideos", "ensuring the gallery recordings folder")
+        java.util.concurrent.Executors.newSingleThreadExecutor().execute {
+            runCatching { com.rogueplayer.data.RecordingStore.ensureFolder(this) }
+                .onFailure { android.util.Log.w("MYTVVideos", "folder creation failed", it) }
         }
     }
 
@@ -183,6 +226,7 @@ class MainActivity : AppCompatActivity() {
      */
     override fun onResume() {
         super.onResume()
+        maybeAskForVideoLibrary()
         // Re-apply window brightness + theme accent when returning from Settings
         // (the other activity may have changed them while we were in the background).
         UiSettings.applyBrightness(this)

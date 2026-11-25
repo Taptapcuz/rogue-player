@@ -42,6 +42,8 @@ import com.rogueplayer.data.Channel
 import com.rogueplayer.data.Entry
 import com.rogueplayer.data.EpgProgram
 import com.rogueplayer.data.Episode
+import com.rogueplayer.data.PhoneVideo
+import com.rogueplayer.data.PhoneVideos
 import com.rogueplayer.data.PlaylistKind
 import com.rogueplayer.data.ScoreGame
 import com.rogueplayer.data.ScoreSource
@@ -221,6 +223,7 @@ class LegacyCarActivity : CarActivity() {
         handler.removeCallbacks(previewTicker)
         // The score poller re-arms itself from the scores page build only.
         handler.removeCallbacks(scoreTicker)
+        handler.removeCallbacks(clockTicker)
         if (pushCurrent) current?.let { backStack.addLast(it) }
         current = page
         root.removeAllViews()
@@ -326,6 +329,12 @@ class LegacyCarActivity : CarActivity() {
         super.onWindowFocusChanged(hasFocus, inTouchMode)
         Log.i(TAG, "window focus=$hasFocus")
         if (hasFocus && !bootStarted) startBoot()
+        // Coming back from the phone's permission dialog (or Settings): rebuild the Videos
+        // page if the answer changed, so the list replaces the prompt without a tap.
+        if (hasFocus && current?.title == "Folders" && hasVideoAccess() != videoAccessSeen) {
+            Log.i(TAG, "videos: access changed -> rebuilding the page")
+            show(videosPage(), pushCurrent = false)
+        }
     }
 
     override fun onStart() {
@@ -346,9 +355,11 @@ class LegacyCarActivity : CarActivity() {
 
     override fun onDestroy() {
         dropKeyboard()
+        handler.removeCallbacks(clockTicker)
         scope.cancel()
         super.onDestroy()
     }
+
 
     // ------------------------------------------------------------ landing ---
     private fun landingPage(): Page = Page("Rogue") { buildLanding() }
@@ -376,7 +387,13 @@ class LegacyCarActivity : CarActivity() {
         host.addView(scroll, FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
 
-        col.addView(text("STREAM EVERYTHING · ONE PLAYER", 12f, Palette.MUTED, true))
+        // Heading block centred over the centred tile grid — tagline and subtitle share one
+        // axis (they used to be left + centred, which read as "not lined up"). The clock is
+        // pinned to the host's top-right corner instead of living in the heading row, so it
+        // cannot push the tagline off-centre.
+        col.addView(text("STREAM EVERYTHING · ONE PLAYER", 12f, Palette.MUTED, true).apply {
+            gravity = Gravity.CENTER
+        })
         col.addView(text("LEGACY EDITION · real exit, no boot hijack", 10f, Palette.DIM, false).apply {
             gravity = Gravity.CENTER
         })
@@ -395,15 +412,17 @@ class LegacyCarActivity : CarActivity() {
         val tiles = listOf(
             Tile("Live TV", R.drawable.ic_nav_live, 0) { show(liveGroupsPage()) },
             Tile("Movies", R.drawable.ic_nav_movies, 0) { show(movieGroupsPage()) },
-            Tile("Scores", R.drawable.ic_nav_sports, 1) { show(scoresPage()) },
-            search,
             Tile("TV Shows", R.drawable.ic_nav_tv, 1) { show(showGroupsPage()) },
+            search,
+            Tile("Folders", R.drawable.ic_nav_videos, 0) { show(videosPage()) },
             Tile("YouTube", R.drawable.ic_nav_youtube, 1) {
                 show(webPage("YouTube", "https://m.youtube.com", YOUTUBE_SEARCH))
             },
         )
-        // Live/Movies · Scores/Search · Shows/YouTube — six tiles, three rows.
-        val rows = tiles.chunked(2)
+        // Two rows of three: Live TV · Movies · TV Shows / Search · Folders · YouTube.
+        // A real head unit is wide and low, so three across fills that shape; the odd tile
+        // out (if a seventh ever comes back) is centred by the single-tile branch below.
+        val rows = tiles.chunked(3)
         rows.forEach { row ->
             val rowLay = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -428,6 +447,8 @@ class LegacyCarActivity : CarActivity() {
             LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply { topMargin = dp(18) })
+        // Our own clock: the host hides its chrome, so the landing would show no time.
+        attachClock(host, topDp = 10, endDp = 12)
         return host
     }
 
@@ -474,7 +495,7 @@ class LegacyCarActivity : CarActivity() {
 
     private fun listPage(
         title: String,
-        action: HeaderAction? = null,
+        actions: List<HeaderAction> = emptyList(),
         rows: () -> List<Row>,
     ): Page {
         lateinit var page: Page
@@ -484,13 +505,17 @@ class LegacyCarActivity : CarActivity() {
                     repo.loadState.first { it }
                     if (current === page) show(page, pushCurrent = false)
                 }
-                column(title, action) { addView(text("Loading your sources…", 14f, Palette.MUTED, false)) }
-            } else buildList(title, rows(), action)
+                column(title, actions) { addView(text("Loading your sources…", 14f, Palette.MUTED, false)) }
+            } else buildList(title, rows(), actions)
         }
         return page
     }
 
-    private fun buildList(title: String, rows: List<Row>, action: HeaderAction? = null): View {
+    private fun buildList(
+        title: String,
+        rows: List<Row>,
+        actions: List<HeaderAction> = emptyList(),
+    ): View {
         val all = ArrayList<Row>()
         svc?.currentTitle?.takeIf { it.isNotBlank() }?.let { t ->
             all.add(Row("▶ Now playing", t) { show(videoPage(t)) })
@@ -502,7 +527,7 @@ class LegacyCarActivity : CarActivity() {
             dividerHeight = 1
             cacheColorHint = Color.TRANSPARENT
         }
-        return column(title, action) {
+        return column(title, actions) {
             addView(list, LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         }
@@ -583,7 +608,7 @@ class LegacyCarActivity : CarActivity() {
     /** Header (back + title + optional trailing action) over a content column. */
     private fun column(
         title: String,
-        action: HeaderAction? = null,
+        actions: List<HeaderAction> = emptyList(),
         fill: LinearLayout.() -> Unit,
     ): View {
         val col = LinearLayout(this).apply {
@@ -603,12 +628,13 @@ class LegacyCarActivity : CarActivity() {
         header.addView(text(title, 16f, Palette.TEXT, true).apply {
             gravity = Gravity.CENTER_VERTICAL
         }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        // Trailing control. One tap: this is a real window, not a template strip.
-        action?.let { a ->
+        // Trailing controls, left to right. One tap each: this is a real window, not a
+        // template strip, so a second action (Scores next to Guide) costs nothing.
+        actions.forEachIndexed { i, a ->
             header.addView(text(a.label, 14f, Palette.ACCENTS[0], true).apply {
                 isClickable = true
                 isFocusable = true
-                setPadding(dp(14), dp(8), dp(6), dp(8))
+                setPadding(dp(14), dp(8), if (i == actions.lastIndex) dp(6) else dp(4), dp(8))
                 setOnClickListener { a.onClick() }
             })
         }
@@ -679,7 +705,7 @@ class LegacyCarActivity : CarActivity() {
     private fun scoresPage(): Page = Page("SCORES") { buildScores() }
 
     private fun buildScores(): View {
-        val view = column("SCORES", HeaderAction("⟳") { loadScores(force = true) }) {
+        val view = column("SCORES", listOf(HeaderAction("⟳") { loadScores(force = true) })) {
             // A stream may be running from the guide or a channel list; the car has no
             // other route back to the picture from here.
             svc?.currentTitle?.takeIf { it.isNotBlank() }?.let { t ->
@@ -1019,10 +1045,194 @@ class LegacyCarActivity : CarActivity() {
         }
 
 
+    // ------------------------------------------------------------- clock ---
+    /**
+     * A hosted car activity gets no Android Auto chrome: the host hides our header, so a
+     * full-screen page shows no time at all. This is our own clock, top-right, on the pages
+     * where the picture fills the window (landing, video). Ticks once a minute-ish; it is
+     * re-registered by each page build and dropped by [show].
+     */
+    private var clockView: TextView? = null
+
+    private val clockTicker = object : Runnable {
+        override fun run() {
+            val v = clockView
+            if (v == null || !v.isAttachedToWindow) return
+            v.text = clockText()
+            // Re-read the format every tick so a 12/24h change on the phone is picked up.
+            handler.postDelayed(this, 15_000L)
+        }
+    }
+
+    private fun clockText(): String =
+        android.text.format.DateFormat.getTimeFormat(this).format(java.util.Date())
+
+    private fun clockChip(size: Float = 11.5f): TextView = text(clockText(), size, Palette.MUTED, true).apply {
+        setPadding(dp(9), dp(5), dp(9), dp(5))
+        background = capsule(tint(0xFF000000.toInt(), 0x66), 14f)
+        alpha = 0.94f
+    }
+
+    /** Put the clock in [host]'s top-right corner and keep it ticking. */
+    private fun attachClock(host: FrameLayout, topDp: Int = 10, endDp: Int = 12) {
+        val v = clockChip()
+        clockView = v
+        host.addView(v, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            Gravity.TOP or Gravity.END,
+        ).apply {
+            topMargin = dp(topDp)
+            marginEnd = dp(endDp)
+        })
+        handler.removeCallbacks(clockTicker)
+        handler.postDelayed(clockTicker, 15_000L)
+    }
+
+    // ------------------------------------------------------------ videos ---
+    /**
+     * The phone's own videos, on the car screen.
+     *
+     * Source is MediaStore (scoped storage means we cannot walk the card), so the page asks
+     * for READ_MEDIA_VIDEO — the dialog lands on the phone, which is why the page says so
+     * instead of silently showing an empty list. Our own Recordings folder is merged in as
+     * one more folder, since Android/data is invisible to MediaStore.
+     */
+    private fun hasVideoAccess(): Boolean =
+        checkSelfPermission(android.Manifest.permission.READ_MEDIA_VIDEO) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+
+    /** Permission state when the Videos page was last built, so a grant made on the phone
+     *  (dialog or Settings) refreshes the page the next time we come back to the foreground. */
+    private var videoAccessSeen = false
+
+    /**
+     * Point the user at the phone's own permission screen for this app.
+     *
+     * The SDK's CarActivity extends ContextWrapper, not Activity (checked with javap on
+     * aauto-sdk v4.5), so there is no requestPermissions here and no runtime dialog to
+     * raise from the car at all. Settings → Rogue Player → Permissions is the honest path;
+     * this only saves hunting for it. The page rebuilds itself on the next window focus
+     * once the answer changes (see onWindowFocusChanged).
+     */
+    private fun openVideoPermissionSettings() {
+        val ok = runCatching {
+            startActivity(
+                Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                    .setData(Uri.parse("package:$packageName"))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }.onFailure { Log.w(TAG, "videos: settings intent failed", it) }.isSuccess
+        Log.i(TAG, "videos: opened app permission settings ok=$ok")
+    }
+
+    private fun videosPage(): Page {
+        lateinit var page: Page
+        page = Page("Folders") {
+            videoAccessSeen = hasVideoAccess()
+            if (!videoAccessSeen) {
+                column("FOLDERS") {
+                    addView(text("Rogue needs access to the videos on this phone.", 15f,
+                        Palette.TEXT, true).apply {
+                        gravity = Gravity.START
+                        setPadding(dp(20), dp(16), dp(20), 0)
+                    })
+                    addView(text(
+                        "Allow \u201CPhotos and videos\u201D for Rogue Player on the phone \u2014 it asks " +
+                            "on first launch. Declined it before? Open the phone's settings and turn it on.",
+                        12f, Palette.MUTED, false,
+                    ).apply {
+                        gravity = Gravity.START
+                        setPadding(dp(20), dp(8), dp(20), 0)
+                    })
+                    addView(pill("Open permission settings on the phone") {
+                        Log.i(TAG, "videos: opening permission settings")
+                        openVideoPermissionSettings()
+                    }, LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { topMargin = dp(20) })
+                }
+            } else {
+                loadVideos(page)
+                column("FOLDERS") {
+                    addView(text("Reading the phone\u2019s videos\u2026", 14f, Palette.MUTED, false))
+                }
+            }
+        }
+        return page
+    }
+
+    private fun loadVideos(page: Page) {
+        scope.launch {
+            val groups = withContext(Dispatchers.IO) {
+                // Access is there: make sure the gallery folder recordings belong in exists.
+                runCatching { com.rogueplayer.data.RecordingStore.ensureFolder(this@LegacyCarActivity) }
+                runCatching { PhoneVideos.folders(this@LegacyCarActivity) }.getOrDefault(emptyMap())
+            }
+            Log.i(TAG, "videos: ${groups.size} folders, ${groups.values.sumOf { it.size }} files " +
+                "(${groups.entries.joinToString { "${it.key}=${it.value.size}" }})")
+            if (current !== page) return@launch
+            root.removeAllViews()
+            root.addView(buildVideoFolders(groups), FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        }
+    }
+
+    private fun buildVideoFolders(groups: Map<String, List<PhoneVideo>>): View {
+        val rows = if (groups.isEmpty()) {
+            listOf(Row("No videos found", "Nothing in this phone's video library") {})
+        } else {
+            groups.map { (folder, items) ->
+                Row(
+                    folder,
+                    if (items.size == 1) "1 video" else "${items.size} videos",
+                ) { show(videoFolderPage(folder, items)) }
+            }
+        }
+        return buildList("Folders", rows, listOf(HeaderAction("\u27F3") {
+            show(videosPage(), pushCurrent = false)
+        }))
+    }
+
+    private fun videoFolderPage(folder: String, items: List<PhoneVideo>): Page =
+        Page(folder) {
+            buildList(folder, items.map { v ->
+                Row(v.name, videoMeta(v)) { play(v.uri, v.name) }
+            })
+        }
+
+    private fun videoMeta(v: PhoneVideo): String {
+        val bits = ArrayList<String>()
+        if (v.durationMs > 0) bits += durationText(v.durationMs)
+        if (v.sizeBytes > 0) bits += sizeText(v.sizeBytes)
+        if (v.modifiedMs > 0) {
+            bits += android.text.format.DateFormat.format("MMM d", v.modifiedMs).toString()
+        }
+        return bits.joinToString(" \u00b7 ")
+    }
+
+    private fun durationText(ms: Long): String {
+        val total = ms / 1000
+        val h = total / 3600
+        val m = (total % 3600) / 60
+        val s = total % 60
+        return if (h > 0) String.format("%d:%02d:%02d", h, m, s)
+        else String.format("%d:%02d", m, s)
+    }
+
+    private fun sizeText(bytes: Long): String = when {
+        bytes >= 1_000_000_000L -> String.format("%.1f GB", bytes / 1_000_000_000.0)
+        bytes >= 1_000_000L -> String.format("%.0f MB", bytes / 1_000_000.0)
+        else -> String.format("%.0f KB", bytes / 1_000.0)
+    }
+
+
     // ---------------------------------------------------------- live tv ---
     private fun liveGroupsPage(): Page = listPage(
         "Live TV",
-        HeaderAction("Guide ▸") { openGuide(null) },
+        listOf(
+            HeaderAction("Scores ▸") { show(scoresPage()) },
+            HeaderAction("Guide ▸") { openGuide(null) },
+        ),
     ) {
         val pl = repo.activePlaylist
         if (pl == null || pl.channels.isEmpty()) {
@@ -1048,7 +1258,7 @@ class LegacyCarActivity : CarActivity() {
     private fun channelsPage(title: String, channels: List<Channel>): Page =
         listPage(
             title,
-            HeaderAction("Guide ▸") { openGuide(channels) },
+            listOf(HeaderAction("Scores ▸") { show(scoresPage()) }, HeaderAction("Guide ▸") { openGuide(channels) }),
         ) {
             ensureRowGuide(channels)
             channels.map { ch -> Row(ch.name, ch.group, ch) { playChannel(ch) } }
@@ -1656,6 +1866,9 @@ class LegacyCarActivity : CarActivity() {
         }
         host.addView(video, FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        // Our own clock: the host hides AA's header on a hosted activity, so the video
+        // page would otherwise show no time at all. Top-right, always on.
+        attachClock(host, topDp = 8, endDp = 10)
 
         // transport overlay: hidden by default, tap the picture to toggle, fades
         // itself out again after a few seconds so the video stays full screen.
