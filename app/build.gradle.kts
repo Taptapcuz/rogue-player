@@ -80,7 +80,9 @@ android {
         versionCode = buildVersionCode
         versionName = buildVersionName
         vectorDrawables { useSupportLibrary = true }
-        ndk { abiFilters += listOf("arm64-v8a") }
+        // arm64 + armeabi-v7a: a 32-bit phone refusing to install is a worse failure than a
+        // fatter APK, and universal APKs still install on arm64 devices.
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
         buildConfigField("String", "BAKED_HOST", "\"" + baked("host") + "\"")
         buildConfigField("String", "BAKED_USER", "\"" + baked("user") + "\"")
         buildConfigField("String", "BAKED_PASS", "\"" + baked("pass") + "\"")

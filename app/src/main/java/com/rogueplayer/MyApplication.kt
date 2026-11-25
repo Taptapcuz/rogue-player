@@ -30,7 +30,26 @@ class MyApplication : Application() {
         // Keep the launcher icon in the stored boot-screen colour (alias swap; no-op when set).
         AppIcon.sync(this)
         repository = PlaylistRepository(this)
+        installCrashLog()
         seedBakedSource()
+    }
+
+    /**
+     * Keep the last crash on disk. There is no crash service behind this app, so the only way a
+     * fault reaches anyone is a customer reading it out to them; a stack trace they can attach to
+     * the bug report beats "it just closed". Writes files/last-crash.txt, then hands the throwable
+     * to the previous handler so the normal crash dialog still appears.
+     */
+    private fun installCrashLog() {
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, error ->
+            runCatching {
+                File(filesDir, "last-crash.txt").writeText(
+                    System.currentTimeMillis().toString() + "\n" + Log.getStackTraceString(error)
+                )
+            }
+            previous?.uncaughtException(thread, error)
+        }
     }
 
     /**
