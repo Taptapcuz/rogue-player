@@ -15,7 +15,8 @@ import android.widget.Switch
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-import com.rogueplayer.BuildConfig
+import com.rogueplayer.BuildConfig
+import com.rogueplayer.data.BakedSource
 import com.rogueplayer.data.Updates
 import java.io.File
 
@@ -251,32 +252,41 @@ class SettingsActivity : AppCompatActivity() {
 
         // Is there a newer build? The feed is the project's release page; a private repo or no
         // network answers "couldn't check", which is not the same as "you're current".
+        // A customer or owner build is ONE artefact handed out by hand, and GitHub only ever
+        // carries the public APK. Offering that download here is how the owner's phone ended up
+        // running the public build: same package, so the install replaced it and the Rogue TV
+        // tab vanished. So on a private build the row explains itself instead of pointing at a
+        // file that isn't this build.
+        val privateBuild = BakedSource.hasPanel
         var updateSub: TextView? = null
         row(
             title = "Check for updates",
-            sub = "Installed $ver · tap to check",
+            sub = if (privateBuild) "Installed $ver · this build updates by hand" else
+                "Installed $ver · tap to check",
             icon = "⟳",
-            onClick = { checkForUpdates(updateSub) },
+            onClick = { if (privateBuild) explainPrivateBuild() else checkForUpdates(updateSub) },
             onSubReady = { updateSub = it },
         )
 
         // Always available, whatever the check said: a customer who cannot reach the feed for
         // any reason still has one obvious place to get the current build.
-        row(
-            title = "Get the latest version",
-            sub = "Opens the release page in your browser",
-            icon = "⬇",
-            onClick = {
-                runCatching {
-                    startActivity(
-                        Intent(
-                            Intent.ACTION_VIEW,
-                            android.net.Uri.parse("https://github.com/Taptapcuz/rogue-player/releases/latest"),
+        if (!privateBuild) {
+            row(
+                title = "Get the latest version",
+                sub = "Opens the release page in your browser",
+                icon = "⬇",
+                onClick = {
+                    runCatching {
+                        startActivity(
+                            Intent(
+                                Intent.ACTION_VIEW,
+                                android.net.Uri.parse("https://github.com/Taptapcuz/rogue-player/releases/latest"),
+                            )
                         )
-                    )
-                }
-            },
-        )
+                    }
+                },
+            )
+        }
 
         // A bug report that arrives with the version, the device and the source already in it is
         // worth ten "it doesn't work" messages.
@@ -299,6 +309,23 @@ class SettingsActivity : AppCompatActivity() {
             setPadding(dp(10), dp(10), dp(10), dp(4))
         }, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+    }
+
+    /**
+     * Said plainly rather than silently hidden: someone holding this build should know why there
+     * is no public update for it, and who to ask for the next file.
+     */
+    private fun explainPrivateBuild() {
+        AlertDialog.Builder(this)
+            .setTitle("This build updates by hand")
+            .setMessage(
+                "This copy came from whoever gave you the app, with the panel address built in. " +
+                    "The public download on GitHub is a different build — it has no panel in it, " +
+                    "so installing it would replace this one and lose the Rogue TV login.\n\n" +
+                    "Ask them for the newer file."
+            )
+            .setPositiveButton("OK", null)
+            .show()
     }
 
     private fun checkForUpdates(sub: TextView?) {

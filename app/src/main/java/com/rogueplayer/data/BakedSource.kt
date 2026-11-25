@@ -33,6 +33,15 @@ object BakedSource {
      */
     val enabled: Boolean get() = HOST.isNotBlank() && USER.isNotBlank() && PASS.isNotBlank()
 
+    /**
+     * True when a panel ADDRESS is baked in, with or without a login: a customer build or the
+     * owner's own. False for the public build, which is the only one GitHub publishes.
+     *
+     * Used to keep the update row honest — see SettingsActivity, where a private build must not
+     * be pointed at the public download.
+     */
+    val hasPanel: Boolean get() = HOST.isNotBlank()
+
     /** Same condition; named separately because seeding reads as its own decision. */
     val autoSeed: Boolean get() = enabled
 
