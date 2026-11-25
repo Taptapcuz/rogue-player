@@ -21,3 +21,6 @@ baked.properties
 keystore.properties
 *.jks
 *.keystore
+
+# Local APK archives (hundreds of MB, never part of the build)
+backups/
