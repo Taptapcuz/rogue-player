@@ -21,6 +21,24 @@ plugins {
 //   gradlew assembleLegacyRelease -PwithPanel      → customer (3 login types)
 //
 val withPanel = providers.gradleProperty("withPanel").isPresent
+
+// ---------------------------------------------------------------- version + package identity --
+//
+// Android only offers an update when versionCode goes UP, so the code cannot be a hand-typed
+// constant that nobody remembers to bump: it is the number of commits, which is monotonic by
+// construction. Both are overridable for a hotfix build off the same commit.
+//
+// The package name is overridable too, so a customer build installs next to your own:
+//   gradlew assembleLegacyRelease -PwithPanel -PappId=com.rogueplayer.tv
+val gitCommitCount: Int = runCatching {
+    providers.exec { commandLine("git", "rev-list", "--count", "HEAD") }
+        .standardOutput.asText.get().trim().toInt()
+}.getOrDefault(0)
+val buildVersionCode: Int = providers.gradleProperty("versionCode").orNull?.toIntOrNull()
+    ?: gitCommitCount.coerceAtLeast(1)
+val buildVersionName: String = providers.gradleProperty("versionName").orNull
+    ?: "1.0." + gitCommitCount
+val appIdOverride: String? = providers.gradleProperty("appId").orNull
 val bakedPanel = Properties().apply {
     val f = rootProject.file("baked.properties")
     if (f.exists()) f.inputStream().use { load(it) }
@@ -44,8 +62,8 @@ android {
         applicationId = "com.rogueplayer"
         minSdk = 29
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = buildVersionCode
+        versionName = buildVersionName
         vectorDrawables { useSupportLibrary = true }
         ndk { abiFilters += listOf("arm64-v8a") }
         buildConfigField("String", "BAKED_HOST", "\"" + baked("host") + "\"")
@@ -81,13 +99,13 @@ android {
     productFlavors {
         create("basic") {
             dimension = "edition"
-            applicationId = "com.rogueplayer.basic"
-            versionName = "1.0-basic"
+            applicationId = appIdOverride ?: "com.rogueplayer.basic"
+            versionName = buildVersionName + "-basic"
         }
         create("locked") {
             dimension = "edition"
-            applicationId = "com.rogueplayer.locked"
-            versionName = "1.0-locked"
+            applicationId = appIdOverride ?: "com.rogueplayer.locked"
+            versionName = buildVersionName + "-locked"
         }
         // CarStream-style test edition: the car side runs on the LEGACY projection
         // auto-sdk (real hosted activity, media/projection categories — NOT the
@@ -96,8 +114,8 @@ android {
         // back/exit should genuinely leave the app. Phone UI is shared src/main.
         create("legacy") {
             dimension = "edition"
-            applicationId = "com.rogueplayer.legacy"
-            versionName = "1.0-legacy"
+            applicationId = appIdOverride ?: "com.rogueplayer.legacy"
+            versionName = buildVersionName + "-legacy"
         }
     }
 

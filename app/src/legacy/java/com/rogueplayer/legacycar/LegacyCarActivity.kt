@@ -215,6 +215,16 @@ class LegacyCarActivity : CarActivity() {
     private val backStack = ArrayDeque<Page>()
     private var current: Page? = null
 
+    /**
+     * Where each page's list was left, so going back lands on the row you were looking at
+     * instead of row one. Pages are rebuilt from scratch on every show(), so the position has
+     * to live outside the ListView. Keyed by page title; the mark is the first visible ROW's
+     * title, not its index — rows are re-derived on each build and the "Now playing" row comes
+     * and goes, so indices shift but titles do not.
+     */
+    private class ScrollMark(val rowTitle: String, val top: Int)
+    private val scrollMarks = mutableMapOf<String, ScrollMark>()
+
     private fun show(page: Page, pushCurrent: Boolean = true) {
         dropKeyboard()
         Log.i(TAG, "show page: ${page.title} (stack=${backStack.size})")
@@ -526,6 +536,25 @@ class LegacyCarActivity : CarActivity() {
             divider = android.graphics.drawable.ColorDrawable(Color.argb(40, 255, 255, 255))
             dividerHeight = 1
             cacheColorHint = Color.TRANSPARENT
+            // Remember the top row on every scroll; back() rebuilds this page and reads it.
+            setOnScrollListener(object : android.widget.AbsListView.OnScrollListener {
+                override fun onScrollStateChanged(view: android.widget.AbsListView?, state: Int) = Unit
+                override fun onScroll(
+                    view: android.widget.AbsListView?,
+                    firstVisible: Int,
+                    visible: Int,
+                    total: Int,
+                ) {
+                    val v = view ?: return
+                    val row = all.getOrNull(v.firstVisiblePosition) ?: return
+                    val child = v.getChildAt(0) ?: return
+                    scrollMarks[title] = ScrollMark(row.title, child.top)
+                }
+            })
+        }
+        scrollMarks[title]?.let { mark ->
+            val at = all.indexOfFirst { it.title == mark.rowTitle }
+            if (at >= 0) list.post { runCatching { list.setSelectionFromTop(at, mark.top) } }
         }
         return column(title, actions) {
             addView(list, LinearLayout.LayoutParams(
