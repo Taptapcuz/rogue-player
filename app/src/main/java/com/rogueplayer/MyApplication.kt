@@ -30,7 +30,6 @@ class MyApplication : Application() {
         // Keep the launcher icon in the stored boot-screen colour (alias swap; no-op when set).
         AppIcon.sync(this)
         repository = PlaylistRepository(this)
-        installCrashLog()
         seedBakedSource()
     }
 
@@ -44,28 +43,6 @@ class MyApplication : Application() {
      *
      * Only builds produced with a local `baked.properties` have a portal at all.
      */
-    /**
-     * Keep the last crash on disk. There is no crash service behind this app, so the only way a
-     * fault ever reaches the author is a customer reading it out to him; a stack trace they can
-     * attach to the bug report beats "it just closed".
-     *
-     * Writes `files/last-crash.txt` (timestamp + stack) and then hands the throwable to whatever
-     * handler was installed before, so the normal crash dialog still appears.
-     */
-    private fun installCrashLog() {
-        val previous = Thread.getDefaultUncaughtExceptionHandler()
-        Thread.setDefaultUncaughtExceptionHandler { thread, error ->
-            runCatching {
-                File(filesDir, "last-crash.txt").writeText(
-                    System.currentTimeMillis().toString() + "\n" + Log.getStackTraceString(error)
-                )
-                Log.i("RogueCrash", "crash written to last-crash.txt")
-            }
-            previous?.uncaughtException(thread, error)
-        }
-        Log.i("RogueCrash", "crash handler installed")
-    }
-
     private fun seedBakedSource() {
         // No baked login (a customer build): there is nothing to seed, and nothing of the
         // owner's should ever be written into somebody else's app.

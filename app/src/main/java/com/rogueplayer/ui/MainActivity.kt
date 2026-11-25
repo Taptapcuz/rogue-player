@@ -914,19 +914,6 @@ class MainActivity : AppCompatActivity() {
             isClickable = true
             isFocusable = true
             setOnClickListener { t.action() }
-            // A remote has no hover and no pressed feedback until the click lands, so the tile
-            // has to say where the focus is: accent ring + a nudge in scale.
-            setOnFocusChangeListener { v, focused ->
-                v.background = if (focused) {
-                    android.graphics.drawable.GradientDrawable().apply {
-                        setColor(0x1AFFFFFF)
-                        cornerRadius = dp(16).toFloat()
-                        setStroke(dp(2), UiSettings.accent(this@MainActivity, 0))
-                    }
-                } else null
-                v.scaleX = if (focused) 1.05f else 1f
-                v.scaleY = v.scaleX
-            }
             addView(
                 android.widget.ImageView(this@MainActivity).apply {
                     setImageResource(t.iconRes)

@@ -80,9 +80,7 @@ android {
         versionCode = buildVersionCode
         versionName = buildVersionName
         vectorDrawables { useSupportLibrary = true }
-        // Both ABIs: a Fire Stick / cheap box is 32-bit, and refusing to install is a much worse
-        // failure than a fatter APK. Universal APKs install on arm64 phones too.
-        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
+        ndk { abiFilters += listOf("arm64-v8a") }
         buildConfigField("String", "BAKED_HOST", "\"" + baked("host") + "\"")
         buildConfigField("String", "BAKED_USER", "\"" + baked("user") + "\"")
         buildConfigField("String", "BAKED_PASS", "\"" + baked("pass") + "\"")
