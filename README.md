@@ -78,6 +78,20 @@ free build. `versionCode` is the git commit count; `versionName` is `1.0.<count>
 - Android 10 (API 29) or newer, **arm64** — 32-bit devices can't install it.
 - Your own M3U link or Xtream login. Nothing else.
 
+## Install
+
+1. Copy the APK to the phone and tap it. Android will ask once to allow installs from that
+   app ("Install unknown apps") — allow it, then install. `adb install <file>.apk` works too.
+2. Open the app → **Add playlist** → M3U link, or Xtream with your server, username and
+   password.
+3. That's the whole install. **Android Auto needs nothing extra:** the car app appears
+   because the phone app declares the Android Auto categories, so the same APK you installed
+   on the phone is what shows on the head unit. No third-party installer, nothing to side-load
+   into the car.
+
+If the car app doesn't appear immediately, unplug and re-plug the phone, or restart the phone
+once after the first install.
+
 ---
 
 ## License
