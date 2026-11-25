@@ -26,17 +26,15 @@ object BakedSource {
     private val PASS = BuildConfig.BAKED_PASS.trim()
 
     /**
-     * True when this build knows the panel's address — enough to offer the "Rogue TV" tab, so
-     * a customer only types a username and password.
+     * True only when a full login is baked in (`-PwithPanel -PwithAccount`). One gate for the
+     * lot: the "Rogue TV" login tab, the hidden address and the automatic seeding all exist
+     * only for the owner's own build. Every other build — the free one and the one customers
+     * get — offers plain M3U and Xtream, where they type their own host and account.
      */
-    val enabled: Boolean get() = HOST.isNotBlank()
+    val enabled: Boolean get() = HOST.isNotBlank() && USER.isNotBlank() && PASS.isNotBlank()
 
-    /**
-     * True only when a full login is baked in as well (`-PwithAccount`). Gates the automatic
-     * seeding: a customer build knows where the panel is but must never create a source with
-     * somebody else's account.
-     */
-    val autoSeed: Boolean get() = HOST.isNotBlank() && USER.isNotBlank() && PASS.isNotBlank()
+    /** Same condition; named separately because seeding reads as its own decision. */
+    val autoSeed: Boolean get() = enabled
 
     private fun bare(): String =
         HOST.removePrefix("https://").removePrefix("http://").trimEnd('/')

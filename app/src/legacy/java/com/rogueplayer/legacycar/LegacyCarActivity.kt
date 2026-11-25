@@ -40,6 +40,8 @@ import com.rogueplayer.MyApplication
 import com.rogueplayer.R
 import com.rogueplayer.data.Channel
 import com.rogueplayer.data.Entry
+import com.rogueplayer.data.MediaDetail
+import com.rogueplayer.data.PlaylistParser
 import com.rogueplayer.data.EpgProgram
 import com.rogueplayer.data.Episode
 import com.rogueplayer.data.PhoneVideo
@@ -1769,9 +1771,137 @@ class LegacyCarActivity : CarActivity() {
     // ------------------------------------------------------------- movies ---
     private fun movieGroupsPage(): Page = listPage("Movies") {
         entryGroups(repo.activePlaylist?.movies.orEmpty()) { entries, g ->
-            posterGridPage(g, entries) { e -> play(e.url, e.name) }
+            posterGridPage(g, entries) { e -> show(movieDetailPage(e)) }
         }
     }
+
+    /**
+     * A film opens on its own page, not straight into the player: in a car you want to know what
+     * you are starting before it starts (and a wrong tap should not cost a stream slot).
+     *
+     * The page draws immediately from what the playlist already knows (title, poster) and fills
+     * the rest from `get_vod_info` — panels answer that slowly or not at all, so coming back to
+     * the same film shows the cached answer instead of waiting again.
+     */
+    private val vodCache = mutableMapOf<String, MediaDetail?>()
+
+    private fun movieDetailPage(e: Entry): Page = Page(e.name) {
+        val known = vodCache.containsKey(e.id)
+        if (!known) {
+            scope.launch {
+                val detail = runCatching {
+                    val pl = repo.activePlaylist ?: return@launch
+                    PlaylistParser.movieDetail(pl.url, e.id)
+                }.getOrNull()
+                vodCache[e.id] = detail
+                if (current?.title == e.name) show(movieDetailPage(e), pushCurrent = false)
+            }
+        }
+        movieDetailView(e, vodCache[e.id], loading = !known)
+    }
+
+    private fun movieDetailView(e: Entry, d: MediaDetail?, loading: Boolean): View =
+        column(e.name) {
+            val scroll = ScrollView(this@LegacyCarActivity).apply {
+                isFillViewport = true
+                setPadding(dp(18), dp(6), dp(18), dp(14))
+                clipToPadding = false
+            }
+            val inner = LinearLayout(this@LegacyCarActivity).apply {
+                orientation = LinearLayout.VERTICAL
+            }
+            val top = LinearLayout(this@LegacyCarActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.TOP
+            }
+
+            // Poster: 2:3, rounded, initials underneath while it loads or if there is no art.
+            val artFrame = FrameLayout(this@LegacyCarActivity).apply {
+                background = capsule(Palette.CARD, 14f)
+                clipToOutline = true
+            }
+            artFrame.addView(text(initialsOf(e.name), 22f, Palette.MUTED, true).apply {
+                gravity = Gravity.CENTER
+            }, FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            val art = d?.poster?.takeIf { it.isNotBlank() } ?: e.logo
+            if (!art.isNullOrBlank()) {
+                artFrame.addView(ImageView(this@LegacyCarActivity).apply {
+                    scaleType = ImageView.ScaleType.CENTER_CROP
+                    load(art)
+                }, FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            }
+            top.addView(artFrame, LinearLayout.LayoutParams(dp(132), dp(198)))
+
+            val meta = LinearLayout(this@LegacyCarActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(18), dp(2), 0, 0)
+            }
+            // year · runtime · rating, the accents line
+            val head = listOfNotNull(
+                d?.year?.takeIf { it.isNotBlank() },
+                d?.duration?.takeIf { it.isNotBlank() },
+                d?.rating?.takeIf { it.isNotBlank() }?.let { "★ $it" },
+            ).joinToString("  ·  ")
+            if (head.isNotBlank()) {
+                meta.addView(text(head, 12.5f, Palette.ACCENTS[0], true).apply { gravity = Gravity.START })
+            }
+            d?.genre?.takeIf { it.isNotBlank() }?.let { g ->
+                meta.addView(text(g.replace(",", " · "), 12f, Palette.MUTED, false).apply {
+                    gravity = Gravity.START
+                    setPadding(0, dp(3), 0, 0)
+                })
+            }
+            val plot = d?.plot?.takeIf { it.isNotBlank() }
+            meta.addView(text(
+                plot ?: if (loading) "Loading details…" else "No description from the provider.",
+                12.5f, if (plot != null) Palette.TEXT else Palette.MUTED, false,
+            ).apply {
+                gravity = Gravity.START
+                maxLines = 6
+                ellipsize = TextUtils.TruncateAt.END
+                setPadding(0, dp(8), 0, 0)
+            })
+            val credits = listOfNotNull(
+                d?.director?.takeIf { it.isNotBlank() }?.let { "Director  $it" },
+                d?.cast?.takeIf { it.isNotBlank() }?.let { "Cast  $it" },
+            ).joinToString("\n")
+            if (credits.isNotBlank()) {
+                meta.addView(text(credits, 11.5f, Palette.MUTED, false).apply {
+                    gravity = Gravity.START
+                    maxLines = 3
+                    ellipsize = TextUtils.TruncateAt.END
+                    setPadding(0, dp(8), 0, 0)
+                })
+            }
+            top.addView(meta, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            inner.addView(top, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
+            // Play last, so the eye lands on it after the metadata.
+            val playBtn = text("▶  Play", 15f, Color.WHITE, true).apply {
+                setPadding(dp(26), dp(13), dp(26), dp(13))
+                background = capsule(Palette.ACCENTS[0], 26f)
+                isClickable = true
+                isFocusable = true
+                setOnClickListener { play(e.url, e.name) }
+            }
+            inner.addView(playBtn, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(18) })
+
+            scroll.addView(inner, android.widget.FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            addView(scroll, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        }
+
+    /** Two letters for the poster placeholder: first letters of the first two words. */
+    private fun initialsOf(name: String): String =
+        name.split(" ").filter { it.isNotBlank() }.take(2)
+            .joinToString("") { it.first().uppercase() }
+            .ifBlank { "?" }
 
     // -------------------------------------------------------------- shows ---
     private fun showGroupsPage(): Page = listPage("TV Shows") {
@@ -1835,30 +1965,126 @@ class LegacyCarActivity : CarActivity() {
             .map { (g, es) -> Row(g, "${es.size} titles") { show(pageFor(es, g)) } }
     }
 
+    /**
+     * A series opens on its own page too: the poster, year/rating/genre and a short synopsis
+     * sit above the episode list, so a pick is informed before it costs a stream slot. Same
+     * shape as [movieDetailPage]: draw what we know, fill the rest from `get_series_info`, and
+     * cache both the metadata and the episode list so returning is instant.
+     */
+    private val seriesCache = mutableMapOf<String, MediaDetail?>()
+    private val carEpCache = mutableMapOf<String, List<Episode>>()
+
     private fun episodesPage(series: Entry): Page {
         lateinit var page: Page
         page = Page(series.name) {
-            scope.launch {
-                val eps = withContext(Dispatchers.IO) {
-                    runCatching { repo.episodesFor(series) }.getOrDefault(emptyList())
-                }
-                if (current === page) {
-                    val rows = eps.map { ep ->
-                        Row(ep.displayTitle(), null) {
-                            play(ep.url, "${series.name} — ${ep.displayTitle()}")
+            val haveSeries = seriesCache.containsKey(series.id)
+            val haveEps = carEpCache.containsKey(series.id)
+            if (!haveSeries || !haveEps) {
+                scope.launch {
+                    val pl = repo.activePlaylist
+                    if (!haveSeries) {
+                        seriesCache[series.id] = runCatching {
+                            if (pl == null || pl.kind != PlaylistKind.XTREAM) null
+                            else PlaylistParser.seriesDetail(pl.url, series.id)
+                        }.getOrNull()
+                    }
+                    if (!haveEps) {
+                        carEpCache[series.id] = withContext(Dispatchers.IO) {
+                            runCatching { repo.episodesFor(series) }.getOrDefault(emptyList())
                         }
                     }
-                    root.removeAllViews()
-                    root.addView(buildList(series.name, rows), FrameLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+                    if (current === page) show(page, pushCurrent = false)
                 }
             }
-            column(series.name) {
-                addView(text("Loading episodes…", 14f, Palette.MUTED, false))
-            }
+            episodesView(series, seriesCache[series.id], carEpCache[series.id])
         }
         return page
     }
+
+    private fun episodesView(series: Entry, d: MediaDetail?, eps: List<Episode>?): View =
+        column(series.name) {
+            // ---- series strip: art, then the facts, then the blurb ----
+            val strip = LinearLayout(this@LegacyCarActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.TOP
+                setPadding(dp(18), dp(6), dp(18), dp(10))
+            }
+            val artFrame = FrameLayout(this@LegacyCarActivity).apply {
+                background = capsule(Palette.CARD, 12f)
+                clipToOutline = true
+            }
+            artFrame.addView(text(initialsOf(series.name), 20f, Palette.MUTED, true).apply {
+                gravity = Gravity.CENTER
+            }, FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            val art = d?.poster?.takeIf { it.isNotBlank() } ?: series.logo
+            if (!art.isNullOrBlank()) {
+                artFrame.addView(ImageView(this@LegacyCarActivity).apply {
+                    scaleType = ImageView.ScaleType.CENTER_CROP
+                    load(art)
+                }, FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            }
+            strip.addView(artFrame, LinearLayout.LayoutParams(dp(96), dp(144)))
+
+            val meta = LinearLayout(this@LegacyCarActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(16), 0, 0, 0)
+            }
+            val head = listOfNotNull(
+                d?.year?.takeIf { it.isNotBlank() },
+                d?.rating?.takeIf { it.isNotBlank() }?.let { "★ $it" },
+                d?.seasons?.takeIf { it.isNotEmpty() }?.let { s ->
+                    if (s.size == 1) "1 season" else "${s.size} seasons"
+                },
+            ).joinToString("  ·  ")
+            if (head.isNotBlank()) {
+                meta.addView(text(head, 12f, Palette.ACCENTS[0], true).apply { gravity = Gravity.START })
+            }
+            d?.genre?.takeIf { it.isNotBlank() }?.let { g ->
+                meta.addView(text(g.replace(",", " · "), 11.5f, Palette.MUTED, false).apply {
+                    gravity = Gravity.START
+                    setPadding(0, dp(2), 0, 0)
+                })
+            }
+            val plot = d?.plot?.takeIf { it.isNotBlank() }
+            meta.addView(text(
+                plot ?: if (d == null) "Loading details…" else "No description from the provider.",
+                12f, if (plot != null) Palette.TEXT else Palette.MUTED, false,
+            ).apply {
+                gravity = Gravity.START
+                maxLines = 3
+                ellipsize = TextUtils.TruncateAt.END
+                setPadding(0, dp(6), 0, 0)
+            })
+            strip.addView(meta, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(strip, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
+            // ---- episodes ----
+            val rows = (eps ?: emptyList()).map { ep ->
+                Row(ep.displayTitle(), null) {
+                    play(ep.url, "${series.name} — ${ep.displayTitle()}")
+                }
+            }
+            val list = ListView(this@LegacyCarActivity).apply {
+                adapter = RowAdapter(rows)
+                divider = android.graphics.drawable.ColorDrawable(Color.argb(40, 255, 255, 255))
+                dividerHeight = 1
+                cacheColorHint = Color.TRANSPARENT
+                if (eps == null) {
+                    addHeaderView(text("Loading episodes…", 13f, Palette.MUTED, false).apply {
+                        setPadding(dp(18), dp(10), dp(18), dp(10))
+                    })
+                } else if (rows.isEmpty()) {
+                    addHeaderView(text("No episodes listed for this series.", 13f, Palette.MUTED, false).apply {
+                        setPadding(dp(18), dp(10), dp(18), dp(10))
+                    })
+                }
+            }
+            addView(list, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        }
 
     // -------------------------------------------------------------- video ---
     private fun videoPage(title: String): Page = Page(title) { buildVideo(title) }

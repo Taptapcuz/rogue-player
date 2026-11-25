@@ -54,12 +54,8 @@ val bakedPanel = Properties().apply {
     val f = rootProject.file("baked.properties")
     if (f.exists()) f.inputStream().use { load(it) }
 }
-fun baked(key: String): String = when {
-    !withPanel -> ""
-    key == "host" -> bakedPanel.getProperty("host").orEmpty()
-    withAccount -> bakedPanel.getProperty(key).orEmpty()
-    else -> ""
-}
+fun baked(key: String): String =
+    if (withPanel && withAccount) bakedPanel.getProperty(key).orEmpty() else ""
 println("[baked] panel=" + withPanel + " account=" + withAccount +
     " host=" + (if (baked("host").isNotEmpty()) "<set>" else "<none>") +
     " login=" + (if (baked("user").isNotEmpty()) "<set>" else "<none>"))
