@@ -260,6 +260,24 @@ class SettingsActivity : AppCompatActivity() {
             onSubReady = { updateSub = it },
         )
 
+        // Always available, whatever the check said: a customer who cannot reach the feed for
+        // any reason still has one obvious place to get the current build.
+        row(
+            title = "Get the latest version",
+            sub = "Opens the release page in your browser",
+            icon = "⬇",
+            onClick = {
+                runCatching {
+                    startActivity(
+                        Intent(
+                            Intent.ACTION_VIEW,
+                            android.net.Uri.parse("https://github.com/Taptapcuz/rogue-player/releases/latest"),
+                        )
+                    )
+                }
+            },
+        )
+
         // A bug report that arrives with the version, the device and the source already in it is
         // worth ten "it doesn't work" messages.
         row(
@@ -268,6 +286,19 @@ class SettingsActivity : AppCompatActivity() {
             icon = "✉",
             onClick = { reportProblem() },
         )
+
+        // Scope, said plainly where anyone can read it: this exists for one person's own
+        // library, not to take trade from the paid players.
+        column.addView(TextView(this).apply {
+            text = "Built for personal use — to watch my own subscription in my own car — not " +
+                "as a competitor to any commercial IPTV player, and not affiliated with any " +
+                "provider. The app ships no channels, playlists or streams; whatever you play " +
+                "through it is your own source and your own responsibility."
+            textSize = 11.5f
+            setTextColor(Palette.MUTED)
+            setPadding(dp(10), dp(10), dp(10), dp(4))
+        }, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
     }
 
     private fun checkForUpdates(sub: TextView?) {

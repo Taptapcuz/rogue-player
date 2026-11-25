@@ -1,121 +1,97 @@
 # Rogue Player
 
-**The actively-built, ad-free, original-designed IPTV player for Android Auto and phone.**
+**An ad-free IPTV player for the phone and for Android Auto — built for personal use.**
 
-Rogue Player plays *your own* IPTV subscription (M3U or Xtream Codes) on your
-phone and, uniquely, in **Android Auto** — a surface the big IPTV players
-(TiviMate, IMPlayer, IBO Player) don't support at all. It's not a content app:
-it ships no channels, playlists, or streams. You bring your own (legal) source.
+Rogue Player plays *your own* IPTV subscription (M3U or Xtream Codes) on your phone and, in
+**Android Auto**, on the car's screen. It is not a content app: it ships no channels,
+playlists or streams. You bring your own (legal) source.
 
 ---
 
-## Why it exists
+## Scope
 
-The TV-first IPTV players own the living room and ignore the car. The
-car-capable players (FermataX, Xtream Player) are free side-projects — one is a
-GPL fork that literally warns users they got scammed if they paid for it, the
-other funds itself with ads. **Nobody offers a clean, maintained, ad-free,
-buyable IPTV player for the car.** That's the gap Rogue Player fills.
+This is a personal build. It exists so one person can watch their own paid subscription in
+their own car, and it is published in case that turns out to be useful to someone else.
+
+It is **not** a rival to any commercial IPTV player, and has no affiliation with any
+provider, reseller or service. No channels, playlists, streams or credentials ship with it.
+
+---
+
+## Why it's built this way
+
+The car is the reason. Most TV-first players (TiviMate, IMPlayer, IBO Player) don't run in
+Android Auto at all. The car-capable ones come with trade-offs I didn't want to live with —
+extra portal formats and add-ons in one case, ads in the other.
+
+So this is the smaller thing that was missing for me: a clean, ad-free player that opens my
+own subscription on the phone and on the car screen, with a UI I designed rather than
+borrowed.
+
+Where the others do more, they genuinely do more — broader portal support, Plex, internet
+radio, Stremio add-ons, catch-up, scheduled recording. None of that is here and none of it is
+planned. This covers live TV, VOD and series from one subscription, an EPG guide, and the car.
 
 ---
 
 ## What it does
 
-- **Live TV** — M3U + Xtream Codes playlists, multiple sources, category chips.
-- **Movies & Series** — poster grids, episode/season browsing, metadata.
-- **EPG guide** — full programme guide with a karaoke-style progress line: the
-  programme text fills with the accent colour as it airs, and a thin underline
-  keeps advancing to the end of the show.
-- **Sports tab** — auto-detects sport categories (NBA, NFL, ESPN, UFC, F1, …)
-  and lands you on the groups, not a raw channel dump.
-- **Category management** — hide/show categories, and reorder them (order is
-  saved per playlist and drives the chips across every tab).
-- **Recording** — one-tap recording of the live channel you're watching. HLS
-  segments are copied byte-for-byte to `Movies/Recordings/` — no re-encode, no
-  CPU cost, picture untouched. Partial files are kept.
-- **Web browsing + YouTube** — a built-in browser for the whole web and for
-  YouTube, straight from the app (phone and car).
-- **Android Auto** — native car landing + projection surface. This is the point.
-- **Original design** — pills, karaoke progress, and a native Rogue boot screen.
-  Not a reskin of someone else's app.
+- **Live TV** — M3U + Xtream Codes sources, category chips, per-source ordering.
+- **Movies & Series** — poster grids, detail pages with cast and synopsis, episode lists.
+- **EPG guide** — full programme guide with a karaoke-style progress line: the programme
+  text fills with the accent colour as it airs, and a thin underline keeps advancing to the
+  end of the show.
+- **Sports** — auto-detects sport categories (NBA, NFL, ESPN, UFC, F1, …) and scores that
+  resolve a game to the channel showing it.
+- **Category management** — hide/show categories and reorder them; the order is saved per
+  source and drives the chips on every tab.
+- **Recording** — one-tap recording of the live channel you're watching. HLS segments are
+  copied byte-for-byte into `Movies/Recordings/` — no re-encode, no CPU cost, picture
+  untouched. Partial files are kept.
+- **Folders** — the phone's own video library, playable in the app.
+- **Web browsing + YouTube** — an in-app browser, phone and car.
+- **Android Auto** — a real car UI: six tiles, a guide with a preview rail, scores, and a
+  video page with a transport strip. Two backs on the landing stop playback and end the
+  process, so nothing keeps a provider connection open.
+- **Own design** — pills, karaoke progress, native boot screen. Not a reskin.
 
 ---
 
-## How it compares
+## Builds
 
-### vs the TV-first paywalled players
-They don't run in Android Auto — at all. If you want IPTV in the car, this is a
-category they can't compete in.
+One codebase, three ways to build it. Which login types appear is decided by what you bake,
+not by a separate branch:
 
-| | Rogue Player | TiviMate / IMPlayer / IBO |
+| build | command | what the login offers |
 |---|---|---|
-| Android Auto | ✅ | ❌ none |
-| Multiple playlists | ✅ free | premium |
-| EPG guide | ✅ free | premium-ish |
-| Recording (one-tap live) | ✅ free | premium |
-| Scheduled / timer recording | — | premium |
-| Catch-up / timeshift | — | premium |
-| Multiview / PiP | — | premium |
-| Original UI (pills, karaoke) | ✅ | ❌ |
+| free / public | `gradlew assembleLegacyRelease` | M3U + Xtream — nothing baked in |
+| customer | `gradlew assembleLegacyRelease -PappId=com.rogueplayer.tv` | the same app under its own package, so it installs alongside |
+| owner | `gradlew assembleLegacyRelease -PwithPanel -PwithAccount` | adds a Rogue TV tab that reads a gitignored `baked.properties` |
 
-### vs the car-capable players (the real competition)
-
-| | **Rogue Player** | FermataX | Xtream Player (Devcoder) |
-|---|---|---|---|
-| Android Auto | ✅ | ✅ | ✅ |
-| Ad-free | ✅ | ✅ | ❌ ads on free tier |
-| Buyable / paid tier | ✅ (planned) | ❌ GPL — can't cleanly sell | ads → unlock only |
-| IPTV + VOD + Series | ✅ | ✅ + Stalker portals | ✅ |
-| In-app web + YouTube browser | ✅ | ✅ | ✅ |
-| Plex / internet radio | — | ✅ Stremio/web extras | ✅ Plex + radio |
-| Original UI + recording | ✅ | varies | ❌ recording |
-
-**The honest position:** FermataX is broader (Stalker/Ministra portals, Stremio
-add-ons) and Xtream Player is a hybrid hub (Plex, internet radio) — on *those
-extras* they do more. But breadth isn't the ask for someone who wants IPTV in the
-car, and Rogue Player already covers the basics they share (IPTV, VOD, web +
-YouTube browsing). It's the **focused, ad-free, original, actively-owned** option,
-and — unlike FermataX (GPL) and Xtream Player (ads-only) — it's the one that can
-exist as a clean paid product.
+`baked.properties` and `keystore.properties` are gitignored, so a clone can only produce the
+free build. `versionCode` is the git commit count; `versionName` is `1.0.<count>-<flavour>`.
 
 ---
 
-## Editions
+## Requirements
 
-Built from one codebase with Gradle flavors:
-
-- **Basic** — free: core playback, EPG, guide, Sports.
-- **Locked** — premium: unlocks the paid-tier features.
+- Android 10 (API 29) or newer, **arm64** — 32-bit devices can't install it.
+- Your own M3U link or Xtream login. Nothing else.
 
 ---
-
-## Building
-
-Requires Android Studio (JDK 17+ bundled) and the Android SDK.
-
-```bash
-# from a cmd prompt or Android Studio (the gradlew wrapper is fussy under git-bash)
-./gradlew assembleBasicDebug     # free edition APK
-./gradlew assembleLockedDebug    # premium edition APK
-```
-
-APKs land in `app/build/outputs/apk/<flavor>/debug/`.
-
----
-
-## Scope & disclaimer
-
-Rogue Player is a **player only**. It does not provide, host, sell, or
-distribute any channels, playlists, streams, or copyrighted media. You must add
-your own source and have the legal right to access it. Android Auto video/IPTV
-is not officially supported by Google — running this in a car requires
-sideloading and is done at your own risk, and only when parked.
 
 ## License
 
 GPL-3.0-or-later. See [LICENSE](LICENSE).
 
-In plain terms: use it, change it, ship it — but if you distribute a modified
-version, its source has to be available under the same license. The app itself
-ships no content; what you play through it is your responsibility and your
-subscription.
+In plain terms: use it, change it, ship it — but if you distribute a modified version, its
+source has to be available under the same license.
+
+---
+
+## Disclaimer
+
+Rogue Player is a **player only**. It does not provide, host, sell or distribute any
+channels, playlists, streams or copyrighted media. You must add your own source and have the
+legal right to access it. Android Auto video/IPTV is not officially supported by Google —
+running this in a car requires sideloading, is done at your own risk, and only when parked.
