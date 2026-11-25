@@ -13,6 +13,11 @@
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
 
+    <!-- Android TV / Fire TV: optional, so the same APK installs on a phone and a TV.
+         A TV launcher only lists apps with a LEANBACK_LAUNCHER entry (below). -->
+    <uses-feature android:name="android.software.leanback" android:required="false" />
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+
     <!-- Android Auto / Android for Cars projection surface -->
     <uses-permission android:name="androidx.car.app.ACCESS_SURFACE" />
     <uses-permission android:name="androidx.car.app.NAVIGATION_TEMPLATES" />
@@ -48,8 +53,14 @@
         <activity
             android:name=".ui.SplashActivity"
             android:exported="true"
+            android:banner="@drawable/tv_banner"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
-            android:theme="@style/Theme.RoguePlayer" />
+            android:theme="@style/Theme.RoguePlayer">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity>
 
         <activity-alias
             android:name=".Launcher.blue"

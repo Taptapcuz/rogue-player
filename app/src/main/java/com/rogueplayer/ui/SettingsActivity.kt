@@ -354,6 +354,12 @@ class SettingsActivity : AppCompatActivity() {
             appendLine()
             appendLine("--- what happened ---")
             appendLine()
+            // A trace from the last crash, if there is a recent one.
+            val crash = runCatching { File(filesDir, "last-crash.txt") }.getOrNull()
+            if (crash != null && crash.exists() && System.currentTimeMillis() - crash.lastModified() < 7L * 24 * 60 * 60 * 1000) {
+                appendLine("--- last crash ---")
+                appendLine(crash.readLines().take(40).joinToString("\n"))
+            }
         }
         val send = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
