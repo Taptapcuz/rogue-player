@@ -15,6 +15,8 @@ import android.widget.Switch
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import com.rogueplayer.BuildConfig
+import com.rogueplayer.data.Updates
 import java.io.File
 
 /**
@@ -246,6 +248,88 @@ class SettingsActivity : AppCompatActivity() {
             packageManager.getPackageInfo(packageName, 0).versionName ?: "?"
         } catch (_: Exception) { "?" }
         row("Version", ver, "ℹ")
+
+        // Is there a newer build? The feed is the project's release page; a private repo or no
+        // network answers "couldn't check", which is not the same as "you're current".
+        var updateSub: TextView? = null
+        row(
+            title = "Check for updates",
+            sub = "Installed $ver · tap to check",
+            icon = "⟳",
+            onClick = { checkForUpdates(updateSub) },
+            onSubReady = { updateSub = it },
+        )
+
+        // A bug report that arrives with the version, the device and the source already in it is
+        // worth ten "it doesn't work" messages.
+        row(
+            title = "Report a problem",
+            sub = "Opens a note with your version, device and source",
+            icon = "✉",
+            onClick = { reportProblem() },
+        )
+    }
+
+    private fun checkForUpdates(sub: TextView?) {
+        val have = BuildConfig.VERSION_CODE
+        sub?.text = "Checking…"
+        Thread {
+            val result = Updates.check()
+            runOnUiThread {
+                result.fold(
+                    onSuccess = { latest ->
+                        when {
+                            latest == null -> sub?.text = "Couldn't check (no public release feed)"
+                            latest.code > have -> {
+                                sub?.text = "Update available: " + latest.versionName
+                                AlertDialog.Builder(this)
+                                    .setTitle(latest.versionName + " is out")
+                                    .setMessage(
+                                        "You have build " + have + ", the latest is " + latest.code +
+                                            ". Open the release page to download it?"
+                                    )
+                                    .setPositiveButton("Open") { _, _ ->
+                                        runCatching {
+                                            startActivity(
+                                                Intent(Intent.ACTION_VIEW, android.net.Uri.parse(latest.pageUrl))
+                                            )
+                                        }
+                                    }
+                                    .setNegativeButton("Later", null)
+                                    .show()
+                            }
+                            else -> sub?.text = "You're on the latest build (" + have + ")"
+                        }
+                    },
+                    onFailure = { sub?.text = "Couldn't check: " + (it.message ?: "network") },
+                )
+            }
+        }.start()
+    }
+
+    /** Version, device, Android level, package and the active source — never the credentials. */
+    private fun reportProblem() {
+        val pkgInfo = runCatching { packageManager.getPackageInfo(packageName, 0) }.getOrNull()
+        val app = application as? com.rogueplayer.MyApplication
+        val source = app?.repository?.activePlaylist?.name ?: "none"
+        val engine = UiSettings.engine(this)
+        val body = buildString {
+            appendLine("Rogue Player " + (pkgInfo?.versionName ?: "?") + " (build " + BuildConfig.VERSION_CODE + ")")
+            appendLine("Package: " + packageName)
+            appendLine("Device: " + android.os.Build.MANUFACTURER + " " + android.os.Build.MODEL +
+                " · Android " + android.os.Build.VERSION.RELEASE + " (SDK " + android.os.Build.VERSION.SDK_INT + ")")
+            appendLine("Player engine: " + engine)
+            appendLine("Active source: " + source)
+            appendLine()
+            appendLine("--- what happened ---")
+            appendLine()
+        }
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, "Rogue Player " + (pkgInfo?.versionName ?: "") + " — problem report")
+            putExtra(Intent.EXTRA_TEXT, body)
+        }
+        runCatching { startActivity(Intent.createChooser(send, "Send the report")) }
     }
 
     // ------------------------------------------------------------------ helpers --
